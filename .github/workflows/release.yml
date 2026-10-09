@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: Test
+        run: go test ./...
+
+      - name: Windows icon and version info
+        run: |
+          go install github.com/tc-hib/go-winres@v0.3.3
+          VERSION="${GITHUB_REF_NAME#v}"
+          cd cmd/celldesk
+          go-winres simply --arch amd64,arm64 --manifest gui \
+            --icon ../../phone/icons/icon-256.png \
+            --product-name CellDesk \
+            --file-description "CellDesk - phone to PC photo receiver" \
+            --product-version "$VERSION" --file-version "$VERSION" \
+            --original-filename celldesk.exe
+
+      - name: Build
+        run: |
+          set -euo pipefail
+          VERSION="$GITHUB_REF_NAME"
+          mkdir -p dist build
+          for target in windows/amd64 windows/arm64 darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do
+            GOOS="${target%/*}"
+            GOARCH="${target#*/}"
+            ext=""
+            ldflags="-s -w -X main.version=$VERSION"
+            if [ "$GOOS" = windows ]; then
+              ext=".exe"
+              ldflags="$ldflags -H=windowsgui"
+            fi
+            name="celldesk-$VERSION-$GOOS-$GOARCH"
+            mkdir -p "build/$name"
+            CGO_ENABLED=0 GOOS="$GOOS" GOARCH="$GOARCH" \
+              go build -trimpath -ldflags "$ldflags" -o "build/$name/celldesk$ext" ./cmd/celldesk
+            cp README.md LICENSE "build/$name/"
+            if [ "$GOOS" = windows ]; then
+              (cd build && zip -qr "../dist/$name.zip" "$name")
+            else
+              tar -czf "dist/$name.tar.gz" -C build "$name"
+            fi
+          done
+          cd dist && sha256sum * > SHA256SUMS.txt
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

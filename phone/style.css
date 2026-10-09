@@ -1,0 +1,104 @@
+:root {
+  --bg: #0b0f17;
+  --panel: #141a26;
+  --line: #222b3b;
+  --text: #e8edf6;
+  --muted: #8b97ab;
+  --accent: #22d3ee;
+  --accent-2: #6366f1;
+  --ok: #34d399;
+  --warn: #fbbf24;
+  --bad: #f87171;
+  --safe-b: env(safe-area-inset-bottom, 0px);
+  --safe-t: env(safe-area-inset-top, 0px);
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { margin: 0; height: 100%; }
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  display: flex;
+  flex-direction: column;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none;
+}
+
+.bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: calc(12px + var(--safe-t)) 16px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.brand { display: flex; align-items: center; gap: 8px; font-weight: 650; font-size: 17px; }
+.chip {
+  font-size: 11px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+  color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 2px 8px;
+}
+.chip:empty { display: none; }
+.status { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); min-width: 0; }
+.status span:last-child { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 46vw; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.status[data-state="online"] .dot { background: var(--ok); box-shadow: 0 0 0 4px rgba(52, 211, 153, .15); }
+.status[data-state="offline"] .dot { background: var(--warn); }
+
+.list { flex: 1; overflow-y: auto; padding: 12px 16px; display: flex; flex-direction: column; gap: 10px; }
+.empty { margin: auto; text-align: center; max-width: 320px; color: var(--muted); }
+.empty h1 { color: var(--text); font-size: 22px; margin: 0 0 8px; }
+.empty p { margin: 0; }
+
+.item {
+  display: flex; gap: 12px; align-items: center;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px;
+}
+.thumb {
+  width: 56px; height: 56px; border-radius: 10px; overflow: hidden; flex: none;
+  background: #1c2433; display: grid; place-items: center; color: var(--muted); font-size: 20px;
+}
+.thumb img { width: 100%; height: 100%; object-fit: cover; }
+.meta { min-width: 0; flex: 1; }
+.name { font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.sub { font-size: 13px; color: var(--muted); }
+.progress { height: 4px; border-radius: 4px; background: #1f2838; margin-top: 7px; overflow: hidden; }
+.progress span { display: block; height: 100%; width: 0; background: linear-gradient(90deg, var(--accent-2), var(--accent)); transition: width .15s; }
+.item[data-state="done"] .progress span { background: var(--ok); }
+.item[data-state="done"] .sub { color: var(--ok); }
+.item[data-state="failed"] { border-color: rgba(248, 113, 113, .5); cursor: pointer; }
+.item[data-state="failed"] .sub { color: var(--bad); }
+.item[data-state="waiting"] .sub { color: var(--warn); }
+
+.unpaired { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; padding: 24px; gap: 4px; }
+.unpaired h1 { margin: 12px 0 4px; font-size: 22px; }
+.unpaired p { margin: 0; color: var(--muted); max-width: 300px; }
+
+.controls {
+  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
+  padding: 14px 24px calc(18px + var(--safe-b));
+  border-top: 1px solid var(--line);
+  background: linear-gradient(180deg, rgba(11, 15, 23, 0), rgba(11, 15, 23, .9) 30%);
+}
+.file { position: absolute; width: 1px; height: 1px; opacity: 0; overflow: hidden; pointer-events: none; }
+.side-btn {
+  position: relative; justify-self: center;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  font: inherit; font-size: 12px; color: var(--muted); background: none; border: 0; padding: 6px; cursor: pointer;
+}
+.side-btn:active { color: var(--text); }
+.count { font-size: 20px; font-weight: 700; line-height: 26px; color: var(--muted); }
+#queue-info[data-active="true"] .count { color: var(--warn); }
+.shutter { position: relative; cursor: pointer; display: block; }
+.ring {
+  width: 78px; height: 78px; border-radius: 50%; display: grid; place-items: center;
+  border: 4px solid var(--text);
+}
+.core {
+  width: 60px; height: 60px; border-radius: 50%;
+  background: linear-gradient(135deg, var(--accent-2), var(--accent));
+  transition: transform .12s;
+}
+.shutter:active .core { transform: scale(.88); }

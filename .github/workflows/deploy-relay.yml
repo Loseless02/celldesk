@@ -1,0 +1,24 @@
+# Optional: deploy the relay to your own Cloudflare account from GitHub.
+# Add a CLOUDFLARE_API_TOKEN secret ("Edit Cloudflare Workers" template) and
+# a CLOUDFLARE_ACCOUNT_ID secret, then run this workflow from the Actions tab.
+name: Deploy relay
+
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: relay
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci
+      - run: npx wrangler deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

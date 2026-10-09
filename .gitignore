@@ -1,0 +1,19 @@
+# Build output
+/dist/
+/build/
+/celldesk
+/celldesk.exe
+*.syso
+
+# Relay
+relay/node_modules/
+relay/.wrangler/
+relay/worker-configuration.d.ts
+relay/.dev.vars*
+
+# Editors / OS
+.vscode/
+.idea/
+.claude/
+.DS_Store
+Thumbs.db

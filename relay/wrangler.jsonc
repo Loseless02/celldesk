@@ -1,0 +1,16 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "celldesk-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-06-01",
+  // The phone app is served from the same files the desktop app embeds.
+  "assets": {
+    "directory": "../phone",
+    "binding": "ASSETS"
+  },
+  "durable_objects": {
+    "bindings": [{ "name": "ROOMS", "class_name": "Room" }]
+  },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["Room"] }],
+  "observability": { "enabled": true }
+}

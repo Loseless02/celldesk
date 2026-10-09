@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>CellDesk</title>
+<link rel="icon" href="/icons/icon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #f5f7fb; --panel: #ffffff; --line: #e3e8f0; --text: #111827; --muted: #64748b;
+    --accent: #4f46e5; --accent-2: #06b6d4; --ok: #059669; --warn: #b45309; --bad: #dc2626;
+    --thumb: #eef2f7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0b0f17; --panel: #121826; --line: #232c3d; --text: #e8edf6; --muted: #8b97ab;
+      --accent: #818cf8; --accent-2: #22d3ee; --ok: #34d399; --warn: #fbbf24; --bad: #f87171;
+      --thumb: #1a2232;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 18px 28px; border-bottom: 1px solid var(--line); background: var(--panel); }
+  .brand { display: flex; align-items: center; gap: 10px; font-size: 18px; font-weight: 700; }
+  .brand small { font-weight: 500; color: var(--muted); font-size: 12px; }
+  .pill { display: inline-flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.warn { background: var(--warn); }
+  main { display: grid; grid-template-columns: 360px 1fr; gap: 24px; padding: 24px 28px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 860px) { main { grid-template-columns: 1fr; padding: 16px; } header { padding: 14px 16px; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
+  .card + .card { margin-top: 16px; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .tabs { display: grid; grid-template-columns: 1fr 1fr; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; margin-bottom: 16px; }
+  .tabs button { border: 0; background: none; color: var(--muted); font: inherit; font-weight: 600; padding: 7px; border-radius: 8px; cursor: pointer; }
+  .tabs button[aria-selected="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
+  .qr { display: block; width: 100%; max-width: 280px; aspect-ratio: 1; margin: 0 auto 12px; border-radius: 12px; background: #fff; padding: 8px; image-rendering: pixelated; }
+  .hint { color: var(--muted); font-size: 13px; margin: 0 0 10px; }
+  .url { font: 12px ui-monospace, SFMono-Regular, Consolas, monospace; word-break: break-all; color: var(--muted); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px; }
+  .row { display: flex; gap: 8px; align-items: center; margin-top: 10px; flex-wrap: wrap; }
+  input[type=text] { flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 8px 10px; }
+  button.btn { font: inherit; font-weight: 600; border: 1px solid var(--line); background: var(--panel); color: var(--text); border-radius: 8px; padding: 7px 12px; cursor: pointer; }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.btn.danger { color: var(--bad); }
+  button.btn:hover { filter: brightness(1.05); }
+  label.toggle { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 8px 0; cursor: pointer; }
+  label.toggle input { width: 18px; height: 18px; accent-color: var(--accent); }
+  .status-line { font-size: 13px; margin: 0 0 12px; display: flex; gap: 7px; align-items: center; }
+  .err { color: var(--bad); font-size: 13px; }
+  .gallery-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 12px; }
+  .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; overflow: hidden; cursor: pointer; text-align: left; padding: 0; font: inherit; color: inherit; }
+  .tile .img { aspect-ratio: 4/3; background: var(--thumb); display: grid; place-items: center; color: var(--muted); font-weight: 700; letter-spacing: .05em; }
+  .tile img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .tile .cap { padding: 8px 10px; }
+  .tile .n { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 600; font-size: 13px; }
+  .tile .s { color: var(--muted); font-size: 12px; }
+  .tile .v { color: var(--ok); }
+  .tile.new { animation: pop .5s ease-out; border-color: var(--accent-2); }
+  @keyframes pop { from { transform: scale(.94); opacity: 0; } }
+  .empty { color: var(--muted); text-align: center; padding: 60px 20px; border: 1px dashed var(--line); border-radius: 16px; }
+  details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  ol { padding-left: 18px; margin: 8px 0 0; color: var(--muted); font-size: 13px; }
+  code { font: 12px ui-monospace, Consolas, monospace; }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><img src="/icons/icon.svg" alt="" width="30" height="30">CellDesk <small id="version"></small></div>
+  <div class="pill"><span class="dot ok"></span><span id="pc-name">Receiving</span></div>
+</header>
+
+<main>
+  <aside>
+    <section class="card">
+      <h2>Pair a phone</h2>
+      <div class="tabs" role="tablist">
+        <button role="tab" id="tab-lan" aria-selected="true">Same Wi-Fi</button>
+        <button role="tab" id="tab-relay" aria-selected="false">Anywhere</button>
+      </div>
+
+      <div id="pane-lan">
+        <p class="hint">Scan with the phone camera (iPhone or Android), then use <b>Add to Home Screen</b> for a one-tap app.</p>
+        <img class="qr" id="qr-lan" alt="Pairing QR code for the local network">
+        <div class="url" id="url-lan"></div>
+      </div>
+
+      <div id="pane-relay" hidden>
+        <p class="status-line" id="relay-status"></p>
+        <div id="relay-ready" hidden>
+          <p class="hint">Works from any network: photos are end-to-end encrypted, the relay only sees scrambled bytes.</p>
+          <img class="qr" id="qr-relay" alt="Pairing QR code for the relay">
+        </div>
+        <div id="relay-setup">
+          <p class="hint">Deploy your free relay once (see README → <i>Send from anywhere</i>), then paste its URL:</p>
+        </div>
+        <div class="row">
+          <input type="text" id="relay-url" placeholder="https://celldesk-relay.you.workers.dev" spellcheck="false">
+          <button class="btn primary" id="relay-save">Save</button>
+        </div>
+        <p class="err" id="relay-err"></p>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>Settings</h2>
+      <label class="toggle">Open photos on this PC as they arrive <input type="checkbox" id="open-on-receive"></label>
+      <label class="toggle">Start CellDesk when I log in <input type="checkbox" id="autostart"></label>
+      <div class="hint" style="margin-top:8px">Save folder</div>
+      <div class="row" style="margin-top:4px">
+        <input type="text" id="save-dir" spellcheck="false">
+        <button class="btn" id="save-dir-btn">Change</button>
+      </div>
+      <p class="err" id="settings-err"></p>
+      <details>
+        <summary>Unpair phones</summary>
+        <p class="hint" style="margin-top:8px">Makes every paired phone scan a new QR code.</p>
+        <div class="row">
+          <button class="btn danger" data-reset="lan">Reset Wi-Fi pairing</button>
+          <button class="btn danger" data-reset="relay">Reset Anywhere pairing</button>
+        </div>
+      </details>
+      <div class="row" style="margin-top:16px">
+        <button class="btn danger" id="quit">Quit CellDesk</button>
+      </div>
+    </section>
+  </aside>
+
+  <section>
+    <div class="gallery-head">
+      <h2 style="margin:0">Received</h2>
+      <button class="btn" id="open-folder">Open folder</button>
+    </div>
+    <div class="grid" id="grid"></div>
+    <div class="empty" id="empty" hidden>Nothing yet. Take a photo on your phone and it appears here instantly.</div>
+  </section>
+</main>
+
+<script>
+(function () {
+  'use strict';
+  const $ = (id) => document.getElementById(id);
+  let state = null;
+  let tab = localStorage.getItem('celldesk.tab') || 'lan';
+
+  async function api(path, body) {
+    const opts = body === undefined ? {} : {
+      method: 'POST', headers: { 'Content-Type': 'application/json', 'X-CellDesk': '1' }, body: JSON.stringify(body),
+    };
+    const r = await fetch(path, opts);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(j.error || ('HTTP ' + r.status));
+    return j;
+  }
+
+  function size(n) {
+    if (n < 1024 * 1024) return Math.max(1, Math.round(n / 1024)) + ' KB';
+    return (n / 1024 / 1024).toFixed(1) + ' MB';
+  }
+
+  function tile(f, isNew) {
+    const b = document.createElement('button');
+    b.className = 'tile' + (isNew ? ' new' : '');
+    b.title = f.name;
+    const ext = (f.name.split('.').pop() || '').toLowerCase();
+    const box = document.createElement('div');
+    box.className = 'img';
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp'].includes(ext)) {
+      const img = document.createElement('img');
+      img.loading = 'lazy';
+      img.alt = '';
+      img.onerror = () => { box.textContent = ext.toUpperCase(); };
+      img.src = '/api/admin/file?name=' + encodeURIComponent(f.name);
+      box.appendChild(img);
+    } else {
+      box.textContent = ext.toUpperCase() || 'FILE';
+    }
+    const cap = document.createElement('div');
+    cap.className = 'cap';
+    const n = document.createElement('div'); n.className = 'n'; n.textContent = f.name;
+    const s = document.createElement('div'); s.className = 's';
+    s.textContent = size(f.size) + (f.via ? ' · ' + f.via : '');
+    if (f.verified) { const v = document.createElement('span'); v.className = 'v'; v.textContent = ' · ✓ verified'; s.appendChild(v); }
+    cap.append(n, s);
+    b.append(box, cap);
+    b.addEventListener('click', () => api('/api/admin/open', { name: f.name }).catch(() => {}));
+    return b;
+  }
+
+  function renderGallery() {
+    const grid = $('grid');
+    grid.textContent = '';
+    state.recent.forEach((f) => grid.appendChild(tile(f, false)));
+    $('empty').hidden = state.recent.length > 0;
+  }
+
+  function setTab(t) {
+    tab = t;
+    try { localStorage.setItem('celldesk.tab', t); } catch (e) {}
+    $('tab-lan').setAttribute('aria-selected', String(t === 'lan'));
+    $('tab-relay').setAttribute('aria-selected', String(t === 'relay'));
+    $('pane-lan').hidden = t !== 'lan';
+    $('pane-relay').hidden = t !== 'relay';
+  }
+
+  function renderRelay() {
+    const r = state.relay;
+    const st = $('relay-status');
+    st.textContent = '';
+    const dot = document.createElement('span');
+    const txt = document.createElement('span');
+    if (!r.url) { dot.className = 'dot'; txt.textContent = 'Not set up'; }
+    else if (r.online) { dot.className = 'dot ok'; txt.textContent = 'Connected to relay'; }
+    else { dot.className = 'dot warn'; txt.textContent = r.error ? 'Relay: ' + r.error : 'Connecting to relay…'; }
+    st.append(dot, txt);
+    $('relay-ready').hidden = !r.url;
+    $('relay-setup').hidden = !!r.url;
+    if (document.activeElement !== $('relay-url')) $('relay-url').value = r.url || '';
+    if (r.url) $('qr-relay').src = '/api/admin/qr.png?mode=relay&_=' + encodeURIComponent(r.phoneUrl.slice(-12));
+  }
+
+  async function load() {
+    state = await api('/api/admin/state');
+    $('version').textContent = state.version;
+    $('pc-name').textContent = 'Receiving on ' + state.name;
+    $('qr-lan').src = '/api/admin/qr.png?mode=lan&_=' + encodeURIComponent(state.lan.url.slice(-12));
+    $('url-lan').textContent = state.lan.url;
+    $('open-on-receive').checked = state.openOnReceive;
+    $('autostart').checked = state.autostart;
+    if (document.activeElement !== $('save-dir')) $('save-dir').value = state.saveDir;
+    renderRelay();
+    renderGallery();
+  }
+
+  function listen() {
+    const es = new EventSource('/api/admin/events');
+    es.onmessage = (e) => {
+      const ev = JSON.parse(e.data);
+      if (ev.type === 'file') {
+        state.recent.unshift(ev.file);
+        $('grid').prepend(tile(ev.file, true));
+        $('empty').hidden = true;
+      } else if (ev.type === 'relay') {
+        state.relay.online = ev.online;
+        state.relay.error = ev.error;
+        renderRelay();
+      } else if (ev.type === 'config') {
+        load();
+      }
+    };
+    es.onerror = () => { $('pc-name').textContent = 'CellDesk is not running'; };
+    es.onopen = () => { if (state) $('pc-name').textContent = 'Receiving on ' + state.name; };
+  }
+
+  async function saveSetting(body, errEl) {
+    errEl.textContent = '';
+    try { await api('/api/admin/settings', body); await load(); }
+    catch (e) { errEl.textContent = e.message; await load().catch(() => {}); }
+  }
+
+  $('tab-lan').onclick = () => setTab('lan');
+  $('tab-relay').onclick = () => setTab('relay');
+  $('relay-save').onclick = () => saveSetting({ relayUrl: $('relay-url').value }, $('relay-err'));
+  $('open-on-receive').onchange = (e) => saveSetting({ openOnReceive: e.target.checked }, $('settings-err'));
+  $('autostart').onchange = (e) => saveSetting({ autostart: e.target.checked }, $('settings-err'));
+  $('save-dir-btn').onclick = () => saveSetting({ saveDir: $('save-dir').value }, $('settings-err'));
+  $('open-folder').onclick = () => api('/api/admin/open', {}).catch(() => {});
+  document.querySelectorAll('[data-reset]').forEach((b) => {
+    b.onclick = async () => {
+      if (!confirm('Unpair all phones for this mode? They will need to scan the new QR code.')) return;
+      await api('/api/admin/reset', { which: b.dataset.reset }).catch((e) => alert(e.message));
+      await load();
+    };
+  });
+  $('quit').onclick = async () => {
+    if (!confirm('Quit CellDesk? Phones cannot send until you start it again.')) return;
+    await api('/api/admin/quit', {}).catch(() => {});
+    document.body.innerHTML = '<p style="padding:40px;text-align:center">CellDesk has stopped. You can close this tab.</p>';
+  };
+
+  setTab(tab);
+  load().then(listen).catch((e) => { $('pc-name').textContent = 'Error: ' + e.message; });
+})();
+</script>
+</body>
+</html>

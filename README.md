@@ -1,0 +1,176 @@
+<p align="center">
+  <img src="phone/icons/icon-192.png" width="96" alt="CellDesk icon">
+</p>
+
+<h1 align="center">CellDesk</h1>
+
+<p align="center">
+  Take a photo on your phone. It's on your PC a second later, in original quality.<br>
+  iPhone and Android · Windows, macOS and Linux · no app store, no cables, no Bluetooth.
+</p>
+
+---
+
+## Why
+
+Sending a photo to your own computer usually means a messenger that compresses
+it, a cloud drive that takes a minute to sync, or a cable. CellDesk keeps it to one tap:
+
+- **Original quality.** The file goes over byte-for-byte: no re-encoding,
+  no resizing, EXIF kept. The PC checks every file with SHA-256 before saving it,
+  and the phone shows **✓ verified**.
+- **Fast.** On the same Wi-Fi the phone talks straight to the PC.
+- **Works from anywhere.** With the optional relay, your phone can send from
+  mobile data or another country. Files are end-to-end encrypted
+  (AES-256-GCM). The relay only passes along encrypted bytes and keeps nothing.
+- **Nothing gets lost.** If the PC is off, photos wait on the phone and go out
+  on their own once it's back.
+- **No app store.** The phone side is a web app you add to your home screen.
+  It works the same on iPhone and Android.
+
+## How it works
+
+```
+                 same Wi-Fi: direct HTTP
+   ┌────────┐ ─────────────────────────────▶ ┌──────────────┐
+   │ Phone  │                                 │ CellDesk on  │──▶ Pictures/CellDesk
+   │ web app│ ──HTTPS──▶ ┌──────────────┐ ──▶ │ your PC      │
+   └────────┘  anywhere  │ your relay   │ WSS └──────────────┘
+                         │ (Cloudflare) │  (PC connects out, so no
+                         └──────────────┘   port forwarding needed)
+```
+
+The protocol is described in [docs/PROTOCOL.md](docs/PROTOCOL.md).
+
+## Quick start (same Wi-Fi)
+
+1. Download CellDesk for your computer from
+   [Releases](https://github.com/Loseless02/celldesk/releases/latest) and unzip it.
+2. Run `celldesk` (`celldesk.exe` on Windows). Your browser opens the dashboard
+   with a QR code.
+   - **Windows:** if Windows asks, allow CellDesk on **private networks**.
+     SmartScreen may warn about an unsigned app: click *More info → Run anyway*.
+   - **macOS:** the first time, right-click → *Open* (or run
+     `xattr -d com.apple.quarantine celldesk`).
+3. Scan the QR code with your phone's camera and open the link.
+4. Add it to your home screen so it opens like an app:
+   - **iPhone (Safari):** Share → *Add to Home Screen*
+   - **Android (Chrome):** ⋮ → *Add to Home screen* / *Install app*
+5. Tap the big shutter button, take a photo, tap *Use Photo*. It's on your PC.
+
+Photos land in `Pictures/CellDesk` by default. You can change the folder in the dashboard.
+To open the dashboard again, run CellDesk again (it won't start twice) or go to
+<http://localhost:47474>.
+
+**Run it in the background:** turn on *Start CellDesk when I log in* in the
+dashboard. On Windows the app has no console window. Use *Quit* in the
+dashboard to stop it.
+
+## Send from anywhere (optional, free)
+
+To send when your phone isn't on the same network as your PC, deploy your own
+relay to Cloudflare once. The free plan covers it: no card, no server to run.
+
+```bash
+cd relay
+npm install
+npx wrangler login
+npx wrangler deploy
+```
+
+Wrangler prints a URL like `https://celldesk-relay.<you>.workers.dev`.
+Paste it into the dashboard under **Pair a phone → Anywhere → Save**, then scan
+that QR code with your phone. Use this pairing on the phone: it works at home too.
+
+<details>
+<summary>Deploy from GitHub instead</summary>
+
+Add the `CLOUDFLARE_API_TOKEN` (template *Edit Cloudflare Workers*) and
+`CLOUDFLARE_ACCOUNT_ID` repository secrets, then run **Actions → Deploy relay**.
+</details>
+
+| | Same Wi-Fi | Anywhere |
+| --- | --- | --- |
+| Setup | none | deploy relay once |
+| Speed | LAN speed | your phone's upload speed |
+| Encryption | none (your own network) | end-to-end AES-256-GCM |
+| Max file size | unlimited | 95 MB per file |
+| Works offline / app install | home-screen shortcut | installable app (PWA, offline queue) |
+
+## Quality notes
+
+- **Photos taken in CellDesk** use the phone's own camera app at full resolution,
+  and that exact file is sent.
+- **iPhone gallery picks:** when you pick a HEIC photo from the library, iOS may
+  hand Safari a full-resolution JPEG copy before CellDesk ever sees the file. To
+  make sure library picks arrive untouched, set
+  *Settings → Camera → Formats → Most Compatible*. The camera then saves JPEG to
+  begin with, so iOS has nothing to convert.
+- Videos work too (gallery button). Large videos are best sent on the same Wi-Fi.
+
+## Security
+
+- **Same Wi-Fi:** the QR code holds a random token. Without it, other devices on
+  your network can't upload. Only your own computer can open the dashboard and its
+  settings, and it's protected against DNS rebinding and cross-site requests.
+- **Anywhere:** the QR code holds a room ID and a 256-bit encryption key. The key
+  stays in the URL fragment, which the browser never sends to the relay. The PC
+  proves it owns its room with its own secret key. Without the key, the relay
+  can't read or change your files.
+- Lost your phone? Go to **Dashboard → Settings → Unpair phones**.
+
+Treat the QR code like a password: anyone who scans it can send files to your PC.
+
+## Build from source
+
+Requirements: Go 1.26+. Node 20+ for the relay.
+
+```bash
+go test ./...
+go build -o celldesk ./cmd/celldesk
+```
+
+Windows build without a console window:
+
+```bash
+go build -ldflags "-H=windowsgui" -o celldesk.exe ./cmd/celldesk
+```
+
+Run the relay locally with `cd relay && npx wrangler dev`, then start the desktop
+app with `celldesk --relay http://localhost:8787`. Set `CELLDESK_HOME` to keep a
+separate config while testing.
+
+Regenerate the PNG icons after editing the design with
+`go run tools/genicons/main.go`.
+
+## Releasing
+
+Push a tag. GitHub Actions tests, builds Windows/macOS/Linux (amd64 and arm64),
+and publishes a release with checksums:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+## Project layout
+
+```
+cmd/celldesk/     desktop entry point
+internal/app/     receiver: HTTP server, relay client, saving, settings
+dashboard/        desktop dashboard (embedded)
+phone/            phone web app (embedded in the desktop app, served by the relay)
+relay/            Cloudflare Worker + Durable Object relay
+docs/PROTOCOL.md  wire formats
+```
+
+## Roadmap
+
+- Tray icon and native notifications
+- Direct peer-to-peer (WebRTC) when the phone is remote, with the relay only as a fallback
+- Send files PC → phone
+- Multiple PCs per phone
+
+## License
+
+[MIT](LICENSE)

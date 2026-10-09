@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0f17">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="CellDesk">
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon.svg" type="image/svg+xml">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="style.css">
+  <title>CellDesk</title>
+</head>
+<body>
+  <header class="bar">
+    <div class="brand">
+      <img src="icons/icon.svg" alt="" width="28" height="28">
+      <span>CellDesk</span>
+      <span class="chip" id="mode"></span>
+    </div>
+    <div class="status" id="status" data-state="pending">
+      <span class="dot"></span><span id="status-text">Connecting…</span>
+    </div>
+  </header>
+
+  <main class="list" id="list" aria-live="polite">
+    <div class="empty" id="empty">
+      <h1>Shoot. It's on your PC.</h1>
+      <p>Photos go over byte-for-byte: no compression, no resizing. Every file is checked with SHA-256 when it lands.</p>
+    </div>
+  </main>
+
+  <section class="unpaired" id="unpaired" hidden>
+    <img src="icons/icon.svg" alt="" width="72" height="72">
+    <h1>Not paired</h1>
+    <p>Open CellDesk on your computer and scan its QR code with this phone's camera.</p>
+  </section>
+
+  <footer class="controls" id="controls">
+    <label class="side-btn" aria-label="Send from gallery">
+      <input class="file" type="file" id="pick" accept="image/*,video/*" multiple>
+      <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 5h16v14H4z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="m4 16 5-5 4 4 2-2 5 5"/><circle cx="15.5" cy="9" r="1.6" fill="currentColor"/></svg>
+      <span>Gallery</span>
+    </label>
+    <label class="shutter" aria-label="Take photo">
+      <input class="file" type="file" id="shoot" accept="image/*" capture="environment">
+      <span class="ring"><span class="core"></span></span>
+    </label>
+    <button class="side-btn" id="queue-info" type="button" data-active="false" aria-label="Retry queued">
+      <span class="count" id="queue-count">0</span>
+      <span>Queued</span>
+    </button>
+  </footer>
+
+  <script src="sha256.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
