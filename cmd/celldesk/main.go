@@ -18,10 +18,19 @@ func main() {
 	relay := flag.String("relay", "", "relay URL to use for sending from anywhere (saved to config)")
 	port := flag.Int("port", 0, "port to listen on (saved to config, default 47474)")
 	showVersion := flag.Bool("version", false, "print version and exit")
+	quit := flag.Bool("quit", false, "stop the running CellDesk and exit")
 	flag.Parse()
 
 	if *showVersion {
 		fmt.Println("celldesk", version)
+		return
+	}
+	if *quit {
+		if err := app.QuitRunning(os.Getenv("CELLDESK_HOME")); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		fmt.Println("CellDesk stopped")
 		return
 	}
 

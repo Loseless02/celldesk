@@ -317,6 +317,8 @@ func (a *App) handleEvents(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
+		case <-a.quit: // let shutdown finish instead of waiting on open dashboards
+			return
 		case data := <-ch:
 			fmt.Fprintf(w, "data: %s\n\n", data)
 		case <-heartbeat.C:

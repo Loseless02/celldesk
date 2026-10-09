@@ -78,8 +78,15 @@ To open the dashboard again, run CellDesk again (it won't start twice) or go to
 <http://localhost:47474>.
 
 **Run it in the background:** turn on *Start CellDesk when I log in* in the
-dashboard. On Windows the app has no console window. Use *Quit* in the
-dashboard to stop it.
+dashboard. There's no console window; CellDesk lives in the tray (Windows
+notification area, Linux status area). Click the icon to open the dashboard,
+right-click for *Open received folder* and *Quit CellDesk*.
+
+**Stop it** (closes port 47474) any of these ways:
+
+- Tray icon → *Quit CellDesk*
+- Dashboard → Settings → *Quit CellDesk*
+- `celldesk --quit` from a terminal (also the way on macOS, which has no tray icon)
 
 ## Send from anywhere, privately (Tailscale)
 

@@ -6,6 +6,7 @@
 package main
 
 import (
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -32,6 +33,13 @@ func main() {
 		{"icon-maskable-512.png", 512, false, 0.78},
 	} {
 		if err := write(filepath.Join(out, ic.file), render(ic)); err != nil {
+			log.Fatal(err)
+		}
+	}
+	// Tray icon sizes, packed into an .ico at runtime on Windows.
+	for _, size := range []int{16, 20, 24, 32, 48, 64} {
+		ic := icon{fmt.Sprintf("tray-%d.png", size), size, true, 1}
+		if err := write(filepath.Join("internal", "app", "trayicon", ic.file), render(ic)); err != nil {
 			log.Fatal(err)
 		}
 	}

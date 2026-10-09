@@ -105,10 +105,14 @@ func Run(opts Options) error {
 
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, os.Interrupt, syscall.SIGTERM)
-	select {
-	case <-sig:
-	case <-a.quit:
-	}
+	go func() {
+		select {
+		case <-sig:
+			a.Quit()
+		case <-a.quit:
+		}
+	}()
+	a.runTray() // blocks until Quit (tray menu, dashboard, --quit or Ctrl+C)
 	log.Printf("shutting down")
 	a.mu.Lock()
 	if a.relayCancel != nil {
@@ -117,7 +121,12 @@ func Run(opts Options) error {
 	a.mu.Unlock()
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	return srv.Shutdown(ctx)
+	if err := srv.Shutdown(ctx); err != nil {
+		// A transfer still running: quitting wins, cut it off.
+		log.Printf("shutdown: %v; closing remaining connections", err)
+		srv.Close()
+	}
+	return nil
 }
 
 func newApp(opts Options, cfgPath string) (*App, error) {
@@ -204,6 +213,36 @@ func (a *App) updateConfig(fn func(*Config) error) error {
 
 func (a *App) dashboardURL() string {
 	return fmt.Sprintf("http://localhost:%d/desk", a.config().Port)
+}
+
+// QuitRunning asks a running CellDesk (found through its config) to stop.
+// configDir may be "" for the default location.
+func QuitRunning(configDir string) error {
+	if configDir == "" {
+		base, err := os.UserConfigDir()
+		if err != nil {
+			return err
+		}
+		configDir = filepath.Join(base, "CellDesk")
+	}
+	cfg, err := loadConfig(filepath.Join(configDir, "config.json"))
+	if err != nil {
+		return err
+	}
+	if !alreadyRunning(cfg.Port) {
+		return errors.New("CellDesk is not running")
+	}
+	req, _ := http.NewRequest(http.MethodPost, fmt.Sprintf("http://localhost:%d/api/admin/quit", cfg.Port), nil)
+	req.Header.Set("X-CellDesk", "1")
+	resp, err := (&http.Client{Timeout: 5 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("CellDesk refused to quit: %s", resp.Status)
+	}
+	return nil
 }
 
 func alreadyRunning(port int) bool {
