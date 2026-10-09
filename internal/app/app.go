@@ -44,6 +44,9 @@ type App struct {
 	recentMu sync.Mutex
 	recent   []Received
 
+	out      *outbox
+	outboxCh chan struct{} // wakes the relay connection to announce outbox changes
+
 	events *broker
 	quit   chan struct{}
 	once   sync.Once
@@ -146,13 +149,19 @@ func newApp(opts Options, cfgPath string) (*App, error) {
 	if version == "" {
 		version = "dev"
 	}
+	out, err := openOutbox(filepath.Join(filepath.Dir(cfgPath), "outbox"))
+	if err != nil {
+		return nil, fmt.Errorf("cannot create outbox: %w", err)
+	}
 	return &App{
-		version: version,
-		cfgPath: cfgPath,
-		name:    name,
-		cfg:     cfg,
-		events:  newBroker(),
-		quit:    make(chan struct{}),
+		version:  version,
+		cfgPath:  cfgPath,
+		name:     name,
+		cfg:      cfg,
+		out:      out,
+		outboxCh: make(chan struct{}, 1),
+		events:   newBroker(),
+		quit:     make(chan struct{}),
 	}, nil
 }
 

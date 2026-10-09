@@ -21,10 +21,24 @@
       <span>CellDesk</span>
       <span class="chip" id="mode"></span>
     </div>
-    <div class="status" id="status" data-state="pending">
-      <span class="dot"></span><span id="status-text">Connecting…</span>
+    <div class="bar-right">
+      <button class="inbox-btn" id="inbox-btn" type="button" hidden aria-label="Files from your PC">
+        <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 13.5 6.5 5h11l2.5 8.5V19H4z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 13.5h4.5l1 2h5l1-2H20"/></svg>
+        <span class="badge" id="inbox-badge" hidden>0</span>
+      </button>
+      <div class="status" id="status" data-state="pending">
+        <span class="dot"></span><span id="status-text">Connecting…</span>
+      </div>
     </div>
   </header>
+
+  <section class="sheet" id="inbox" hidden>
+    <div class="scan-bar">
+      <span>From your PC</span>
+      <button class="link" id="inbox-close" type="button">Done</button>
+    </div>
+    <div class="list" id="inbox-list"></div>
+  </section>
 
   <main class="list" id="list" aria-live="polite">
     <div class="empty" id="empty">
@@ -45,9 +59,19 @@
       <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M4 5h16v14H4z"/><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="m4 16 5-5 4 4 2-2 5 5"/><circle cx="15.5" cy="9" r="1.6" fill="currentColor"/></svg>
       <span>Gallery</span>
     </label>
+    <label class="side-btn" aria-label="Send files">
+      <input class="file" type="file" id="files" multiple>
+      <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round" d="M3.5 6.5a1.5 1.5 0 0 1 1.5-1.5h4.2l2 2.2H19a1.5 1.5 0 0 1 1.5 1.5v9.3A1.5 1.5 0 0 1 19 19.5H5a1.5 1.5 0 0 1-1.5-1.5z"/></svg>
+      <span>Files</span>
+    </label>
     <label class="shutter" aria-label="Take photo">
       <input class="file" type="file" id="shoot" accept="image/*" capture="environment">
       <span class="ring"><span class="core"></span></span>
+    </label>
+    <label class="side-btn" aria-label="Scan document">
+      <input class="file" type="file" accept="image/*" capture="environment" data-scan>
+      <svg viewBox="0 0 24 24" width="26" height="26" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" d="M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16M7.5 9.5h9M7.5 12h9M7.5 14.5h6"/></svg>
+      <span>Scan</span>
     </label>
     <button class="side-btn" id="queue-info" type="button" data-active="false" aria-label="Retry queued">
       <span class="count" id="queue-count">0</span>
@@ -55,7 +79,29 @@
     </button>
   </footer>
 
+  <section class="scanner" id="scanner" hidden>
+    <div class="scan-bar">
+      <button class="link" id="scan-cancel" type="button">Cancel</button>
+      <span id="scan-title"></span>
+      <button class="link" id="scan-filter" type="button" aria-label="Change scan style"></button>
+    </div>
+    <div class="scan-stage" id="scan-stage">
+      <canvas id="scan-canvas"></canvas>
+      <svg id="scan-svg" aria-hidden="true"></svg>
+      <img class="scan-preview" id="scan-preview" alt="Last scanned page" hidden>
+      <div class="scan-busy" id="scan-busy" hidden></div>
+    </div>
+    <div class="scan-pages" id="scan-pages" hidden></div>
+    <div class="scan-actions">
+      <label class="btn" id="scan-retake"><input class="file" type="file" accept="image/*" capture="environment" data-scan>Retake</label>
+      <button class="btn primary" id="scan-keep" type="button">Keep page</button>
+      <label class="btn" id="scan-add"><input class="file" type="file" accept="image/*" capture="environment" data-scan>+ Add page</label>
+      <button class="btn primary" id="scan-send" type="button">Send PDF</button>
+    </div>
+  </section>
+
   <script src="sha256.js"></script>
+  <script src="scanner.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

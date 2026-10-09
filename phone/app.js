@@ -5,7 +5,9 @@
   'use strict';
 
   const $ = (id) => document.getElementById(id);
-  const MAGIC = new TextEncoder().encode('CellDesk1');
+  const MAGIC = new TextEncoder().encode('CellDesk1');      // phone -> PC frames
+  const DOWN_MAGIC = new TextEncoder().encode('CellDesk2'); // PC -> phone frames
+  const DIRECT_MIN = 300 * 1024 * 1024; // bigger PC files download natively (no in-page check)
   const CHUNK = 1 << 20;
   const RELAY_MAX = 95 * 1024 * 1024;
   const STORE_KEY = 'celldesk.pairing';
@@ -50,6 +52,19 @@
     return window.sha256hex(bytes);
   }
 
+  // Hashes a file in slices so large videos or documents never sit in memory whole.
+  async function hashFile(file) {
+    if (window.isSecureContext && window.crypto && crypto.subtle && file.size <= 256 * 1024 * 1024) {
+      return toHex(await crypto.subtle.digest('SHA-256', await file.arrayBuffer()));
+    }
+    const h = new window.Sha256();
+    const step = 4 * 1024 * 1024;
+    for (let o = 0; o < file.size; o += step) {
+      h.update(new Uint8Array(await file.slice(o, o + step).arrayBuffer()));
+    }
+    return h.hex();
+  }
+
   function formatSize(n) {
     if (n < 1024) return n + ' B';
     if (n < 1024 * 1024) return (n / 1024).toFixed(0) + ' KB';
@@ -79,6 +94,26 @@
     });
   }
 
+  // GET with download progress. expected is used when the server streams
+  // without a Content-Length (the relay).
+  function xhrGet(url, type, onProgress, expected) {
+    return new Promise((resolve, reject) => {
+      const x = new XMLHttpRequest();
+      x.open('GET', url);
+      x.responseType = type;
+      x.onprogress = (e) => {
+        const total = e.lengthComputable ? e.total : expected;
+        if (total) onProgress(Math.min(1, e.loaded / total));
+      };
+      x.onload = () => {
+        if (x.status === 200) resolve(x.response);
+        else reject(new Error(x.status === 404 ? 'No longer on the PC' : x.status === 503 ? 'PC offline' : 'Error ' + x.status));
+      };
+      x.onerror = x.ontimeout = () => reject(new Error('PC not reachable'));
+      x.send();
+    });
+  }
+
   // ---------- transports ----------
 
   // Tailscale gives devices 100.64.0.0/10 addresses.
@@ -97,8 +132,21 @@
         const r = await fetch('/api/hello?t=' + encodeURIComponent(p.token), { cache: 'no-store' });
         if (r.status === 401) return { online: false, unpaired: true };
         const j = await r.json();
-        return { online: !!j.ok, name: j.name };
+        return { online: !!j.ok, name: j.name, outbox: j.outbox };
       },
+      async listOutbox() {
+        const r = await fetch('/api/outbox?t=' + encodeURIComponent(p.token), { cache: 'no-store' });
+        if (!r.ok) throw new Error('Error ' + r.status);
+        return (await r.json()).items || [];
+      },
+      download(item, onProgress) {
+        return xhrGet('/api/outbox/' + item.id + '?t=' + encodeURIComponent(p.token), 'blob', onProgress);
+      },
+      // Very large files skip the in-page download and go straight to the browser.
+      directUrl(item) {
+        return '/api/outbox/' + item.id + '?dl=1&t=' + encodeURIComponent(p.token);
+      },
+      needsBytes: false,
       send(job, bytes, hash, onProgress) {
         return xhrPost('/api/upload', {
           'X-CellDesk-Token': p.token,
@@ -114,7 +162,40 @@
   function relayTransport(p) {
     let keyPromise = null;
     const key = () => keyPromise || (keyPromise = crypto.subtle.importKey(
-      'raw', b64urlDecode(p.key), { name: 'AES-GCM' }, false, ['encrypt']));
+      'raw', b64urlDecode(p.key), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']));
+
+    // Reverses the PC's frames (see docs/PROTOCOL.md); returns meta + data.
+    async function decrypt(buf) {
+      const k = await key();
+      const dv = new DataView(buf.buffer, buf.byteOffset, buf.byteLength);
+      let off = 0, index = 0, meta = null, final = false;
+      const parts = [];
+      while (off < buf.length) {
+        if (final || off + 4 > buf.length) throw new Error('Corrupt download');
+        const len = dv.getUint32(off);
+        if (len < 29 || off + 4 + len > buf.length) throw new Error('Corrupt download');
+        const flags = buf[off + 4];
+        const aad = new Uint8Array(DOWN_MAGIC.length + 5);
+        aad.set(DOWN_MAGIC);
+        new DataView(aad.buffer).setUint32(DOWN_MAGIC.length, index);
+        aad[aad.length - 1] = flags;
+        let plain;
+        try {
+          plain = new Uint8Array(await crypto.subtle.decrypt({
+            name: 'AES-GCM', iv: buf.subarray(off + 5, off + 17), additionalData: aad, tagLength: 128,
+          }, k, buf.subarray(off + 17, off + 4 + len)));
+        } catch (e) {
+          throw new Error('Could not decrypt: scan the QR code again');
+        }
+        if (index === 0) meta = JSON.parse(new TextDecoder().decode(plain));
+        else parts.push(plain);
+        final = (flags & 1) === 1;
+        off += 4 + len;
+        index++;
+      }
+      if (!final || !meta) throw new Error('Download incomplete');
+      return { meta, parts };
+    }
 
     async function encrypt(bytes, meta) {
       const k = await key();
@@ -148,12 +229,24 @@
     return {
       label: 'Anywhere',
       offlineText: 'PC offline — photos will queue',
+      needsBytes: true, // the whole file is encrypted before upload
       maxSize: RELAY_MAX,
       async hello() {
         const r = await fetch('/s/' + p.room, { cache: 'no-store' });
         const j = await r.json();
-        return { online: !!j.online, name: j.name || p.name };
+        return { online: !!j.online, name: j.name || p.name, outbox: j.outbox };
       },
+      async listOutbox() {
+        const buf = await xhrGet('/l/' + p.room, 'arraybuffer', () => {});
+        return (await decrypt(new Uint8Array(buf))).meta.items || [];
+      },
+      async download(item, onProgress) {
+        const buf = await xhrGet('/d/' + p.room + '/' + item.id, 'arraybuffer', onProgress, item.size);
+        const { meta, parts } = await decrypt(new Uint8Array(buf));
+        if (meta.id !== item.id) throw new Error('Wrong file received');
+        return new Blob(parts, { type: item.type || 'application/octet-stream' });
+      },
+      directUrl: null,
       async send(job, bytes, hash, onProgress) {
         const body = await encrypt(bytes, {
           name: job.name, size: bytes.length, type: job.type, modified: job.modified, sha256: hash,
@@ -214,7 +307,8 @@
         img.src = URL.createObjectURL(job.file);
         el.querySelector('.thumb').appendChild(img);
       } else {
-        el.querySelector('.thumb').textContent = /^video\//.test(job.type) ? '▶' : '■';
+        const ext = (job.name.split('.').pop() || '').slice(0, 4).toUpperCase();
+        el.querySelector('.thumb').textContent = /^video\//.test(job.type) ? '▶' : (ext || 'FILE');
       }
       el.addEventListener('click', () => {
         if (job.state === 'failed') { job.state = 'waiting'; render(job); pump(); }
@@ -282,8 +376,13 @@
     job.state = 'preparing'; job.progress = 0; render(job);
     let res;
     try {
-      const bytes = new Uint8Array(await job.file.arrayBuffer());
-      const hash = await sha256Hex(bytes);
+      let bytes = null, hash;
+      if (transport.needsBytes) {
+        bytes = new Uint8Array(await job.file.arrayBuffer());
+        hash = await sha256Hex(bytes);
+      } else {
+        hash = await hashFile(job.file);
+      }
       job.state = 'sending'; render(job);
       res = await transport.send(job, bytes, hash, (f) => { job.progress = f; render(job); });
     } catch (e) {
@@ -335,6 +434,10 @@
     else setStatus('offline', transport.offlineText);
     jobs.forEach((j) => { if (j.state === 'waiting') render(j); });
     if (online) pump();
+    if (online && h.outbox != null && h.outbox !== outboxVersion) {
+      outboxVersion = h.outbox;
+      refreshInbox();
+    }
   }
 
   function showUnpaired() {
@@ -342,6 +445,157 @@
     $('controls').hidden = true;
     $('list').hidden = true;
     setStatus('offline', 'Not paired');
+  }
+
+  // ---------- files from the PC ----------
+
+  const SAVED_KEY = 'celldesk.saved';
+  let inbox = [];
+  let outboxVersion = null;
+  const fetched = new Map(); // id -> { state, progress, file, error }
+
+  function savedIds() {
+    try { return new Set(JSON.parse(localStorage.getItem(SAVED_KEY) || '[]')); } catch (e) { return new Set(); }
+  }
+  function markSaved(id) {
+    const s = savedIds();
+    s.add(id);
+    try { localStorage.setItem(SAVED_KEY, JSON.stringify(Array.from(s).slice(-500))); } catch (e) { /* ignore */ }
+  }
+
+  async function refreshInbox() {
+    try { inbox = await transport.listOutbox(); } catch (e) { return; }
+    updateBadge();
+    if (!$('inbox').hidden) renderInbox();
+  }
+
+  function updateBadge() {
+    const saved = savedIds();
+    const fresh = inbox.filter((i) => !saved.has(i.id)).length;
+    $('inbox-btn').hidden = inbox.length === 0;
+    $('inbox-badge').hidden = fresh === 0;
+    $('inbox-badge').textContent = String(fresh);
+  }
+
+  function buttonLabel(st) {
+    switch (st.state) {
+      case 'loading': return Math.round((st.progress || 0) * 100) + '%';
+      case 'ready': return 'Save';
+      case 'saved': return 'Saved ✓';
+      case 'error': return 'Retry';
+      default: return 'Get';
+    }
+  }
+
+  function renderInbox() {
+    const list = $('inbox-list');
+    list.textContent = '';
+    if (!inbox.length) {
+      const p = document.createElement('p');
+      p.className = 'inbox-empty';
+      p.textContent = 'Nothing here. Drop files on "Send to phone" in CellDesk on your PC.';
+      list.appendChild(p);
+      return;
+    }
+    const saved = savedIds();
+    inbox.forEach((item) => {
+      const st = fetched.get(item.id) || { state: saved.has(item.id) ? 'saved' : 'idle' };
+      const el = document.createElement('article');
+      el.className = 'item';
+      const thumb = document.createElement('div');
+      thumb.className = 'thumb';
+      if (st.file && /^image\//.test(item.type)) {
+        const img = document.createElement('img');
+        img.alt = '';
+        img.src = st.url || (st.url = URL.createObjectURL(st.file));
+        thumb.appendChild(img);
+      } else {
+        thumb.textContent = (item.name.split('.').pop() || 'FILE').slice(0, 4).toUpperCase();
+      }
+      const meta = document.createElement('div');
+      meta.className = 'meta';
+      const name = document.createElement('div');
+      name.className = 'name';
+      name.textContent = item.name;
+      const sub = document.createElement('div');
+      sub.className = 'sub';
+      sub.textContent = formatSize(item.size) + (st.state === 'error' ? ' · ' + st.error : st.state === 'ready' ? ' · ✓ verified' : '');
+      meta.append(name, sub);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'get-btn';
+      btn.dataset.state = st.state;
+      btn.textContent = buttonLabel(st);
+      btn.onclick = () => onGet(item);
+      el.append(thumb, meta, btn);
+      list.appendChild(el);
+    });
+  }
+
+  function downloadBlob(file) {
+    const url = URL.createObjectURL(file);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  }
+
+  // Two taps on purpose: "Get" downloads and verifies, "Save" opens the share
+  // sheet, which browsers only allow straight after a tap.
+  async function onGet(item) {
+    const st = fetched.get(item.id) || { state: 'idle' };
+    fetched.set(item.id, st);
+    if (st.state === 'loading') return;
+    if (st.file) {
+      const file = st.file;
+      if (navigator.canShare && navigator.canShare({ files: [file] })) {
+        try { await navigator.share({ files: [file] }); } catch (e) {
+          if (e && e.name === 'AbortError') return;
+          downloadBlob(file);
+        }
+      } else {
+        downloadBlob(file);
+      }
+      st.state = 'saved';
+      markSaved(item.id);
+      updateBadge();
+      renderInbox();
+      return;
+    }
+    if (transport.directUrl && item.size >= DIRECT_MIN) {
+      location.href = transport.directUrl(item);
+      st.state = 'saved';
+      markSaved(item.id);
+      updateBadge();
+      renderInbox();
+      return;
+    }
+    if (item.size > transport.maxSize) {
+      st.state = 'error';
+      st.error = 'Too big for the relay, use Wi-Fi';
+      renderInbox();
+      return;
+    }
+    st.state = 'loading';
+    st.progress = 0;
+    renderInbox();
+    try {
+      const blob = await transport.download(item, (f) => {
+        st.progress = f;
+        const btn = Array.from(document.querySelectorAll('#inbox-list .get-btn'))[inbox.indexOf(item)];
+        if (btn) btn.textContent = buttonLabel(st);
+      });
+      if ((await hashFile(blob)) !== item.sha256) throw new Error('Checksum mismatch, try again');
+      st.file = new File([blob], item.name, { type: item.type || 'application/octet-stream' });
+      st.state = 'ready';
+    } catch (e) {
+      st.state = 'error';
+      st.error = (e && e.message) || 'Failed';
+    }
+    renderInbox();
   }
 
   // ---------- start ----------
@@ -364,6 +618,10 @@
     $('mode').textContent = transport.label;
     bindInput('shoot');
     bindInput('pick');
+    bindInput('files');
+    window.CellDeskScanner.init(addFiles);
+    $('inbox-btn').onclick = () => { $('inbox').hidden = false; renderInbox(); refreshInbox(); };
+    $('inbox-close').onclick = () => { $('inbox').hidden = true; };
     $('queue-info').addEventListener('click', () => {
       jobs.forEach((j) => { if (j.state === 'failed') { j.state = 'waiting'; render(j); } });
       check();
@@ -388,6 +646,6 @@
     }
   }
 
-  window.CellDesk = { addFiles, jobs, check };
+  window.CellDesk = { addFiles, jobs, check, inbox: () => inbox, onGet };
   start();
 })();

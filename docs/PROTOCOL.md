@@ -16,6 +16,16 @@ The desktop app listens on port `47474`. The pairing QR code is
 Upload replies `200 {ok, name, size, sha256, verified}`, `401` (unpaired),
 `422 hash_mismatch` or `5xx` (phone keeps the file queued and retries).
 
+Files the PC shares with phones ("Send to phone"):
+
+| Request | Purpose |
+| --- | --- |
+| `GET /api/outbox?t=<token>` | `{ok, items: [{id, name, size, type, sha256, added}]}` |
+| `GET /api/outbox/<id>?t=<token>[&dl=1]` | The file (supports `Range`); `dl=1` sets `Content-Disposition: attachment` |
+
+`/api/hello` returns `outbox` (a version string) so phones only list the outbox
+when it changed. The phone checks every download against `sha256`.
+
 Dashboard endpoints under `/desk` and `/api/admin/*` only answer requests from
 the same computer addressed to `localhost`, and writes require the
 `X-CellDesk: 1` header, which blocks DNS-rebinding and cross-site requests.
@@ -60,3 +70,15 @@ Uploads are serialised per room. The PC answers
 `{"t":"ack","id","ok",...}`, which the relay returns to the phone:
 `200` on success, `503` for retryable errors (`pc_offline`, `pc_disconnected`,
 `timeout`), `422` otherwise.
+
+### PC → phone (outbox)
+
+* The PC sends `{"t":"outbox","v":"<version>"}` on connect and on every change;
+  `GET /s/<room>` returns it as `outbox`.
+* `GET /l/<room>` lists the outbox, `GET /d/<room>/<id>` downloads one file.
+  The relay sends `{"t":"list","id"}` or `{"t":"get","id","file"}` to the PC,
+  which replies `{"t":"rbegin","id","ok"[,"error"]}`, binary messages, then
+  `{"t":"rend","id","ok"}`. Downloads are serialised per room.
+* The body uses the same frame format with AAD magic **`CellDesk2`** (uploads use
+  `CellDesk1`, so neither direction can be replayed as the other). Frame 0 is the
+  item JSON (or `{items:[...]}` for a list), then the file, last frame flagged final.

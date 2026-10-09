@@ -4,5 +4,5 @@ package phone
 
 import "embed"
 
-//go:embed index.html app.js sha256.js style.css sw.js manifest.webmanifest icons
+//go:embed index.html app.js sha256.js scanner.js style.css sw.js manifest.webmanifest icons
 var FS embed.FS

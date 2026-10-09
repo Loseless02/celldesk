@@ -58,6 +58,21 @@ The protocol is described in [docs/PROTOCOL.md](docs/PROTOCOL.md).
    - **Android (Chrome):** ⋮ → *Add to Home screen* / *Install app*
 5. Tap the big shutter button, take a photo, tap *Use Photo*. It's on your PC.
 
+The bottom bar on the phone:
+
+| Button | What it does |
+| --- | --- |
+| **Gallery** | Send photos and videos from the photo library |
+| **Files** | Send any file (PDFs, documents, zips…) from the phone's files |
+| **Shutter** | Take a photo with the phone camera and send it at full quality |
+| **Scan** | Scan documents: finds the page, lets you fix the corners, straightens it, removes shadows, and sends all pages as one PDF |
+| **Queued** | Files waiting for the PC; tap to retry now |
+
+**PC → phone:** drop files on **Send to phone** in the dashboard. An inbox
+icon with a badge appears on the phone: tap **Get** (downloads and checks
+SHA-256), then **Save** (iPhone share sheet → *Save Image* / *Save to Files*;
+Android downloads). Files stay available until you remove them on the PC.
+
 Photos land in `Pictures/CellDesk` by default. You can change the folder in the dashboard.
 To open the dashboard again, run CellDesk again (it won't start twice) or go to
 <http://localhost:47474>.
@@ -185,8 +200,8 @@ docs/PROTOCOL.md  wire formats
 
 - Tray icon and native notifications
 - Direct peer-to-peer (WebRTC) when the phone is remote, with the relay only as a fallback
-- Send files PC → phone
 - Multiple PCs per phone
+- Push notification on the phone when the PC sends something
 
 ## License
 

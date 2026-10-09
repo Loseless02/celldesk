@@ -11,12 +11,22 @@ export interface Env {
   ASSETS: Fetcher;
 }
 
-const ROUTE = /^\/(pc|u|s)\/([A-Za-z0-9_-]{16,64})$/;
+// /pc/<room> PC socket · /u/<room> phone upload · /s/<room> status
+// /l/<room> outbox list · /d/<room>/<file id> outbox download
+const ROUTE = /^\/(pc|u|s|l|d)\/([A-Za-z0-9_-]{16,64})(?:\/([0-9a-f]{16}))?$/;
+const DOWNLOAD_START_MS = 30_000;
 const MAX_UPLOAD = 100 * 1024 * 1024;
 const WS_CHUNK = 256 * 1024;
 const ACK_TIMEOUT_MS = 120_000;
 
 type Ack = { ok: boolean; error?: string; [k: string]: unknown };
+type Attachment = { name?: string; outbox?: string };
+type Download = {
+  id: string;
+  writer: WritableStreamDefaultWriter<Uint8Array>;
+  start: (r: { ok: boolean; error?: string }) => void;
+  done: () => void;
+};
 
 function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -33,7 +43,8 @@ async function sha256hex(s: string): Promise<string> {
 export default {
   async fetch(request, env): Promise<Response> {
     const m = ROUTE.exec(new URL(request.url).pathname);
-    if (!m) return env.ASSETS.fetch(request);
+    // Only downloads carry a file id.
+    if (!m || (m[1] === "d") !== !!m[3]) return env.ASSETS.fetch(request);
     const stub = env.ROOMS.get(env.ROOMS.idFromName(m[2]));
     return stub.fetch(request);
   },
@@ -42,6 +53,8 @@ export default {
 export class Room extends DurableObject<Env> {
   private pending = new Map<string, (ack: Ack) => void>();
   private chain: Promise<unknown> = Promise.resolve();
+  private dl: Download | null = null;
+  private dlChain: Promise<unknown> = Promise.resolve();
 
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
@@ -50,17 +63,18 @@ export class Room extends DurableObject<Env> {
   }
 
   async fetch(request: Request): Promise<Response> {
-    const kind = new URL(request.url).pathname.split("/")[1];
+    const [, kind, , file] = new URL(request.url).pathname.split("/");
     if (kind === "pc") return this.attachPC(request);
     if (kind === "s") {
       const pc = this.pc();
-      const att = pc?.deserializeAttachment() as { name?: string } | null;
-      return json({ online: !!pc, name: att?.name ?? null });
+      const att = pc?.deserializeAttachment() as Attachment | null;
+      return json({ online: !!pc, name: att?.name ?? null, outbox: att?.outbox ?? null });
     }
     if (kind === "u") {
       if (request.method !== "POST") return json({ ok: false, error: "method_not_allowed" }, 405);
       return this.enqueue(request);
     }
+    if (kind === "l" || kind === "d") return this.enqueueDownload(kind === "l" ? "list" : "get", file);
     return new Response("not found", { status: 404 });
   }
 
@@ -155,19 +169,81 @@ export class Room extends DurableObject<Env> {
     return json(result, result.ok ? 200 : retryable ? 503 : 422);
   }
 
+  // Downloads (phone asks for the PC's outbox) run one at a time: the PC's
+  // binary messages then always belong to the current one.
+  private enqueueDownload(kind: "list" | "get", file?: string): Promise<Response> {
+    if (!this.pc()) return Promise.resolve(json({ ok: false, error: "pc_offline" }, 503));
+    let release!: () => void;
+    const finished = new Promise<void>((r) => { release = r; });
+    const run = this.dlChain.then(() => this.download(kind, file, release));
+    this.dlChain = run.then(() => finished, () => release()).catch(() => {});
+    return run;
+  }
+
+  private async download(kind: "list" | "get", file: string | undefined, release: () => void): Promise<Response> {
+    const ws = this.pc();
+    if (!ws) {
+      release();
+      return json({ ok: false, error: "pc_offline" }, 503);
+    }
+    const id = crypto.randomUUID();
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+    const started = new Promise<{ ok: boolean; error?: string }>((resolve) => {
+      const timer = setTimeout(() => resolve({ ok: false, error: "timeout" }), DOWNLOAD_START_MS);
+      this.dl = {
+        id,
+        writer: writable.getWriter(),
+        start: (r) => { clearTimeout(timer); resolve(r); },
+        done: release,
+      };
+    });
+    ws.send(JSON.stringify({ t: kind, id, file }));
+    const r = await started;
+    if (!r.ok) {
+      this.finishDownload(id, false);
+      return json({ ok: false, error: r.error }, r.error === "not_found" ? 404 : 503);
+    }
+    return new Response(readable, {
+      headers: { "Content-Type": "application/octet-stream", "Cache-Control": "no-store" },
+    });
+  }
+
+  private finishDownload(id: string, ok: boolean): void {
+    const d = this.dl;
+    if (!d || d.id !== id) return;
+    this.dl = null;
+    d.start({ ok: false, error: "pc_disconnected" }); // no-op once started
+    (ok ? d.writer.close() : d.writer.abort("download failed")).catch(() => {});
+    d.done();
+  }
+
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer): Promise<void> {
-    if (typeof message !== "string") return;
-    let m: { t?: string; id?: string };
+    if (typeof message !== "string") {
+      this.dl?.writer.write(new Uint8Array(message)).catch(() => {});
+      return;
+    }
+    let m: { t?: string; id?: string; ok?: boolean; error?: string; v?: string };
     try { m = JSON.parse(message); } catch { return; }
     if (m.t === "ack" && typeof m.id === "string") this.pending.get(m.id)?.(m as Ack);
+    else if (m.t === "rbegin" && this.dl && this.dl.id === m.id) this.dl.start({ ok: !!m.ok, error: m.error });
+    else if (m.t === "rend" && typeof m.id === "string") this.finishDownload(m.id, m.ok !== false);
+    else if (m.t === "outbox" && typeof m.v === "string") {
+      const att = (ws.deserializeAttachment() as Attachment | null) ?? {};
+      ws.serializeAttachment({ ...att, outbox: m.v.slice(0, 64) });
+    }
+  }
+
+  private failAll(): void {
+    for (const settle of [...this.pending.values()]) settle({ ok: false, error: "pc_disconnected" });
+    if (this.dl) this.finishDownload(this.dl.id, false);
   }
 
   async webSocketClose(ws: WebSocket, code: number, reason: string): Promise<void> {
-    for (const settle of [...this.pending.values()]) settle({ ok: false, error: "pc_disconnected" });
+    this.failAll();
     try { ws.close(code === 1005 || code === 1006 ? 1000 : code, reason); } catch { /* already closed */ }
   }
 
   async webSocketError(): Promise<void> {
-    for (const settle of [...this.pending.values()]) settle({ ok: false, error: "pc_disconnected" });
+    this.failAll();
   }
 }

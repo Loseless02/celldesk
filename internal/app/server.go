@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
@@ -27,6 +28,8 @@ func (a *App) routes() http.Handler {
 	mux.Handle("GET /", noCache(http.FileServerFS(phone.FS)))
 	mux.HandleFunc("GET /api/hello", a.handleHello)
 	mux.HandleFunc("POST /api/upload", a.handleUpload)
+	mux.HandleFunc("GET /api/outbox", a.handleOutboxList)
+	mux.HandleFunc("GET /api/outbox/{id}", a.handleOutboxFile)
 
 	// Dashboard (this computer only).
 	mux.HandleFunc("GET /desk", a.admin(a.handleDesk))
@@ -36,6 +39,8 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("GET /api/admin/file", a.admin(a.handleFile))
 	mux.HandleFunc("POST /api/admin/settings", a.admin(a.handleSettings))
 	mux.HandleFunc("POST /api/admin/reset", a.admin(a.handleReset))
+	mux.HandleFunc("POST /api/admin/outbox", a.admin(a.handleOutboxAdd))
+	mux.HandleFunc("POST /api/admin/outbox/remove", a.admin(a.handleOutboxRemove))
 	mux.HandleFunc("POST /api/admin/open", a.admin(a.handleOpen))
 	mux.HandleFunc("POST /api/admin/quit", a.admin(a.handleQuit))
 	return mux
@@ -108,7 +113,73 @@ func (a *App) handleHello(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "app": "celldesk", "error": "unpaired"})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "app": "celldesk", "name": a.name, "version": a.version})
+	v, n := a.out.state()
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "app": "celldesk", "name": a.name, "version": a.version,
+		"outbox": fmt.Sprintf("%d-%d", v, n),
+	})
+}
+
+func (a *App) handleOutboxList(w http.ResponseWriter, r *http.Request) {
+	if !a.tokenOK(r.URL.Query().Get("t")) {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unpaired"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "items": a.out.list()})
+}
+
+func (a *App) handleOutboxFile(w http.ResponseWriter, r *http.Request) {
+	if !a.tokenOK(r.URL.Query().Get("t")) {
+		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "unpaired"})
+		return
+	}
+	f, item, err := a.out.open(r.PathValue("id"))
+	if err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": "not_found"})
+		return
+	}
+	defer f.Close()
+	disposition := "inline"
+	if r.URL.Query().Get("dl") == "1" {
+		disposition = "attachment"
+	}
+	w.Header().Set("Content-Type", item.Type)
+	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": item.Name}))
+	w.Header().Set("X-File-SHA256", item.SHA256)
+	w.Header().Set("Cache-Control", "no-store")
+	http.ServeContent(w, r, "", item.Added, f)
+}
+
+func (a *App) handleOutboxAdd(w http.ResponseWriter, r *http.Request) {
+	name, err := url.PathUnescape(r.Header.Get("X-File-Name"))
+	if err != nil || name == "" {
+		name = "file"
+	}
+	item, err := a.out.add(name, r.Header.Get("Content-Type"), r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	a.outboxChanged()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "item": item})
+}
+
+func (a *App) handleOutboxRemove(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		ID  string `json:"id"`
+		All bool   `json:"all"`
+	}
+	_ = json.NewDecoder(io.LimitReader(r.Body, 1<<12)).Decode(&req)
+	if req.ID == "" && !req.All {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "nothing to remove"})
+		return
+	}
+	if err := a.out.remove(req.ID); err != nil && !req.All {
+		writeJSON(w, http.StatusNotFound, map[string]any{"ok": false, "error": err.Error()})
+		return
+	}
+	a.outboxChanged()
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
 func (a *App) handleUpload(w http.ResponseWriter, r *http.Request) {
@@ -200,6 +271,7 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 			"phoneUrl": a.relayPhoneURL(),
 		},
 		"recent": a.recentFiles(),
+		"outbox": a.out.list(),
 	})
 }
 

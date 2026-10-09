@@ -60,6 +60,14 @@
   .tile.new { animation: pop .5s ease-out; border-color: var(--accent-2); }
   @keyframes pop { from { transform: scale(.94); opacity: 0; } }
   .empty { color: var(--muted); text-align: center; padding: 60px 20px; border: 1px dashed var(--line); border-radius: 16px; }
+  .drop { display: block; text-align: center; padding: 18px 12px; border: 2px dashed var(--line); border-radius: 12px; cursor: pointer; color: var(--text); font-size: 13px; }
+  .drop.over { border-color: var(--accent-2); background: var(--bg); }
+  .out { display: flex; align-items: center; gap: 8px; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 13px; }
+  .out:last-child { border-bottom: 0; }
+  .out .n { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .out .s { color: var(--muted); }
+  .out button { border: 0; background: none; color: var(--muted); font-size: 16px; cursor: pointer; padding: 2px 6px; }
+  .out button:hover { color: var(--bad); }
   details summary { cursor: pointer; color: var(--muted); font-size: 13px; }
   ol { padding-left: 18px; margin: 8px 0 0; color: var(--muted); font-size: 13px; }
   code { font: 12px ui-monospace, Consolas, monospace; }
@@ -119,6 +127,20 @@
         </div>
         <p class="err" id="relay-err"></p>
       </div>
+    </section>
+
+    <section class="card" id="send-card">
+      <h2>Send to phone</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="out-pick" multiple hidden>
+        <b>Drop files here</b> or click to choose
+        <span class="hint" style="display:block;margin:4px 0 0">Paired phones get them under the inbox icon.</span>
+      </label>
+      <div id="out-list"></div>
+      <div class="row" id="out-actions" hidden>
+        <button class="btn danger" id="out-clear">Remove all</button>
+      </div>
+      <p class="err" id="out-err"></p>
     </section>
 
     <section class="card">
@@ -260,6 +282,35 @@
     renderTailnet();
     renderRelay();
     renderGallery();
+    renderOutbox();
+  }
+
+  function renderOutbox() {
+    const list = $('out-list');
+    list.textContent = '';
+    (state.outbox || []).forEach((it) => {
+      const row = document.createElement('div');
+      row.className = 'out';
+      const n = document.createElement('span'); n.className = 'n'; n.textContent = it.name; n.title = it.name;
+      const s = document.createElement('span'); s.className = 's'; s.textContent = size(it.size);
+      const rm = document.createElement('button'); rm.textContent = '×'; rm.title = 'Remove';
+      rm.onclick = () => api('/api/admin/outbox/remove', { id: it.id }).catch((e) => { $('out-err').textContent = e.message; });
+      row.append(n, s, rm);
+      list.appendChild(row);
+    });
+    $('out-actions').hidden = !(state.outbox || []).length;
+  }
+
+  async function sendToPhone(files) {
+    $('out-err').textContent = '';
+    for (const f of Array.from(files)) {
+      const r = await fetch('/api/admin/outbox', {
+        method: 'POST',
+        headers: { 'X-CellDesk': '1', 'X-File-Name': encodeURIComponent(f.name), 'Content-Type': f.type || 'application/octet-stream' },
+        body: f,
+      }).catch(() => null);
+      if (!r || !r.ok) { $('out-err').textContent = 'Could not add ' + f.name; break; }
+    }
   }
 
   function listen() {
@@ -274,7 +325,7 @@
         state.relay.online = ev.online;
         state.relay.error = ev.error;
         renderRelay();
-      } else if (ev.type === 'config') {
+      } else if (ev.type === 'config' || ev.type === 'outbox') {
         load();
       }
     };
@@ -304,6 +355,16 @@
   $('autostart').onchange = (e) => saveSetting({ autostart: e.target.checked }, $('settings-err'));
   $('save-dir-btn').onclick = () => saveSetting({ saveDir: $('save-dir').value }, $('settings-err'));
   $('open-folder').onclick = () => api('/api/admin/open', {}).catch(() => {});
+  $('out-pick').onchange = (e) => { sendToPhone(e.target.files); e.target.value = ''; };
+  $('out-clear').onclick = () => {
+    if (confirm('Remove every file waiting for your phones?')) api('/api/admin/outbox/remove', { all: true }).catch(() => {});
+  };
+  const drop = $('drop');
+  ['dragenter', 'dragover'].forEach((t) => drop.addEventListener(t, (e) => { e.preventDefault(); drop.classList.add('over'); }));
+  ['dragleave', 'drop'].forEach((t) => drop.addEventListener(t, () => drop.classList.remove('over')));
+  // A file dropped outside the box would otherwise make the browser open it.
+  ['dragover', 'drop'].forEach((t) => window.addEventListener(t, (e) => e.preventDefault()));
+  drop.addEventListener('drop', (e) => { e.preventDefault(); if (e.dataTransfer.files.length) sendToPhone(e.dataTransfer.files); });
   document.querySelectorAll('[data-reset]').forEach((b) => {
     b.onclick = async () => {
       if (!confirm('Unpair all phones for this mode? They will need to scan the new QR code.')) return;

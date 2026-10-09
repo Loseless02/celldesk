@@ -58,7 +58,7 @@ body {
 }
 .thumb {
   width: 56px; height: 56px; border-radius: 10px; overflow: hidden; flex: none;
-  background: #1c2433; display: grid; place-items: center; color: var(--muted); font-size: 20px;
+  background: #1c2433; display: grid; place-items: center; color: var(--muted); font-size: 13px; font-weight: 700;
 }
 .thumb img { width: 100%; height: 100%; object-fit: cover; }
 .meta { min-width: 0; flex: 1; }
@@ -77,8 +77,8 @@ body {
 .unpaired p { margin: 0; color: var(--muted); max-width: 300px; }
 
 .controls {
-  display: grid; grid-template-columns: 1fr auto 1fr; align-items: center;
-  padding: 14px 24px calc(18px + var(--safe-b));
+  display: grid; grid-template-columns: 1fr 1fr auto 1fr 1fr; align-items: center;
+  padding: 14px 8px calc(18px + var(--safe-b));
   border-top: 1px solid var(--line);
   background: linear-gradient(180deg, rgba(11, 15, 23, 0), rgba(11, 15, 23, .9) 30%);
 }
@@ -102,3 +102,53 @@ body {
   transition: transform .12s;
 }
 .shutter:active .core { transform: scale(.88); }
+
+/* Files from the PC */
+.bar-right { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.inbox-btn { position: relative; background: none; border: 0; color: var(--text); padding: 4px; cursor: pointer; }
+.badge {
+  position: absolute; top: -4px; right: -6px; min-width: 18px; height: 18px; padding: 0 5px; border-radius: 9px;
+  background: var(--accent); color: #04121a; font-size: 11px; font-weight: 700; line-height: 18px; text-align: center;
+}
+.sheet { position: fixed; inset: 0; z-index: 9; background: var(--bg); display: flex; flex-direction: column; }
+.sheet .scan-bar { padding-left: 16px; border-bottom: 1px solid var(--line); }
+.get-btn {
+  flex: none; min-width: 74px; font: inherit; font-size: 14px; font-weight: 600; padding: 8px 12px; border-radius: 10px;
+  border: 0; color: #fff; background: linear-gradient(135deg, var(--accent-2), var(--accent)); cursor: pointer;
+}
+.get-btn[data-state="loading"] { background: #1f2838; color: var(--muted); }
+.get-btn[data-state="saved"] { background: #1f2838; color: var(--ok); }
+.get-btn[data-state="error"] { background: #1f2838; color: var(--bad); }
+.inbox-empty { margin: auto; color: var(--muted); }
+
+/* Document scanner */
+.scanner { position: fixed; inset: 0; z-index: 10; background: #000; display: flex; flex-direction: column; }
+.scan-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: calc(10px + var(--safe-t)) 8px 10px; font-size: 14px; font-weight: 600;
+}
+.link { font: inherit; color: var(--accent); background: none; border: 0; padding: 8px; cursor: pointer; min-width: 64px; }
+#scan-filter { text-align: right; }
+.scan-stage { flex: 1; position: relative; overflow: hidden; touch-action: none; }
+.scan-stage canvas { position: absolute; }
+.scan-stage svg { position: absolute; inset: 0; width: 100%; height: 100%; }
+.scan-quad { fill: rgba(34, 211, 238, .14); stroke: var(--accent); stroke-width: 2; }
+.scan-handle { fill: #fff; stroke: var(--accent); stroke-width: 3; pointer-events: none; }
+.scan-hit { fill: transparent; cursor: grab; }
+.scan-preview { position: absolute; inset: 14px; width: calc(100% - 28px); height: calc(100% - 28px); object-fit: contain; }
+.scan-busy { position: absolute; inset: 0; display: grid; place-items: center; background: rgba(0, 0, 0, .6); font-weight: 600; }
+.scan-pages { display: flex; gap: 8px; overflow-x: auto; padding: 10px 12px 2px; }
+.scan-pages .pg { position: relative; flex: none; width: 50px; height: 66px; border-radius: 6px; overflow: hidden; border: 1px solid var(--line); background: #111; }
+.scan-pages img { width: 100%; height: 100%; object-fit: cover; }
+.scan-pages .rm {
+  position: absolute; top: 2px; right: 2px; width: 20px; height: 20px; border-radius: 50%; border: 0;
+  background: rgba(0, 0, 0, .7); color: #fff; font-size: 14px; line-height: 20px; padding: 0; cursor: pointer;
+}
+.scan-actions { display: flex; gap: 10px; padding: 12px 12px calc(14px + var(--safe-b)); }
+.btn {
+  position: relative; flex: 1; display: grid; place-items: center; min-height: 48px;
+  font: inherit; font-weight: 600; color: var(--text); background: var(--panel);
+  border: 1px solid var(--line); border-radius: 12px; cursor: pointer;
+}
+.btn.primary { background: linear-gradient(135deg, var(--accent-2), var(--accent)); border: 0; color: #fff; }
+.btn:disabled { opacity: .45; }

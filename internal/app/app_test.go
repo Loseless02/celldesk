@@ -58,7 +58,7 @@ func encryptUpload(t *testing.T, key string, data []byte, meta fileMeta) []byte 
 			flags = flagFinal
 		}
 		iv := randomBytes(t, 12)
-		ct := aead.Seal(nil, iv, plain, frameAAD(idx, flags))
+		ct := aead.Seal(nil, iv, plain, frameAAD(upMagic, idx, flags))
 		binary.Write(&out, binary.BigEndian, uint32(1+12+len(ct)))
 		out.WriteByte(flags)
 		out.Write(iv)
@@ -210,6 +210,85 @@ func TestAdminIsLocalOnly(t *testing.T) {
 		if rec.Code != c.want {
 			t.Errorf("%s %s from %s host %s: got %d want %d", c.method, path, c.remote, c.host, rec.Code, c.want)
 		}
+	}
+}
+
+func TestEncryptFramesRoundTrip(t *testing.T) {
+	a := testApp(t)
+	aead, _ := newAEAD(a.config().E2EKey)
+	for _, size := range []int{0, 5, 1 << 20, 2<<20 + 99} {
+		data := randomBytes(t, size)
+		var body []byte
+		meta := fileMeta{Name: "from-pc.bin", Size: int64(size), SHA256: sum(data)}
+		err := encryptFrames(aead, downMagic, meta, bytes.NewReader(data), func(m []byte) error {
+			if len(m) > 256<<10 {
+				t.Fatalf("message of %d bytes exceeds relay chunk", len(m))
+			}
+			body = append(body, m...)
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		tr := &relayTransfer{app: a, aead: aead, magic: downMagic}
+		tr.feed(body)
+		ack := tr.finish()
+		if ack["ok"] != true {
+			t.Fatalf("size %d: %v", size, ack)
+		}
+		got, _ := os.ReadFile(filepath.Join(a.config().SaveDir, ack["name"].(string)))
+		if !bytes.Equal(got, data) {
+			t.Fatalf("size %d: bytes differ", size)
+		}
+		// The other direction's magic must not decrypt it (no replay across directions).
+		up := &relayTransfer{app: a, aead: aead}
+		up.feed(body)
+		if up.finish()["ok"] != false {
+			t.Fatalf("size %d: down frames accepted as upload", size)
+		}
+	}
+}
+
+func TestOutboxLAN(t *testing.T) {
+	a := testApp(t)
+	srv := httptest.NewServer(a.routes())
+	defer srv.Close()
+	data := randomBytes(t, 300_000)
+	item, err := a.out.add("Report Q3.pdf", "", bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if item.Type != "application/pdf" || item.SHA256 != sum(data) {
+		t.Fatalf("bad item %+v", item)
+	}
+	tok := a.config().LANToken
+
+	if r, _ := http.Get(srv.URL + "/api/outbox?t=wrong"); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("list without token: %d", r.StatusCode)
+	}
+	r, _ := http.Get(srv.URL + "/api/outbox?t=" + tok)
+	var list struct{ Items []OutItem }
+	json.NewDecoder(r.Body).Decode(&list)
+	if len(list.Items) != 1 || list.Items[0].ID != item.ID {
+		t.Fatalf("list %+v", list)
+	}
+	r, _ = http.Get(srv.URL + "/api/outbox/" + item.ID + "?dl=1&t=" + tok)
+	got := new(bytes.Buffer)
+	got.ReadFrom(r.Body)
+	if !bytes.Equal(got.Bytes(), data) || !strings.Contains(r.Header.Get("Content-Disposition"), "attachment") {
+		t.Fatalf("download mismatch (%d bytes, %q)", got.Len(), r.Header.Get("Content-Disposition"))
+	}
+	if r, _ := http.Get(srv.URL + "/api/outbox/../config.json?t=" + tok); r.StatusCode == http.StatusOK {
+		t.Fatal("path traversal served a file")
+	}
+
+	// Survives a restart, then removal empties it.
+	reopened, err := openOutbox(a.out.dir)
+	if err != nil || len(reopened.list()) != 1 {
+		t.Fatalf("reopen: %v %d", err, len(reopened.list()))
+	}
+	if err := a.out.remove(item.ID); err != nil || len(a.out.list()) != 0 {
+		t.Fatalf("remove: %v", err)
 	}
 }
 

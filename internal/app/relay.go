@@ -4,15 +4,18 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -28,7 +31,8 @@ import (
 // Frame 0 holds JSON metadata, frames 1..n hold the file; the last frame has
 // flags&1 set. AES-256-GCM with the key from the QR code.
 const (
-	frameMagic   = "CellDesk1"
+	upMagic      = "CellDesk1" // phone to PC
+	downMagic    = "CellDesk2" // PC to phone, so one direction can't be replayed as the other
 	flagFinal    = 1
 	maxFrameSize = 4 << 20
 )
@@ -55,24 +59,25 @@ func newAEAD(b64key string) (cipher.AEAD, error) {
 	return cipher.NewGCM(block)
 }
 
-func frameAAD(index uint32, flags byte) []byte {
-	aad := make([]byte, len(frameMagic)+5)
-	copy(aad, frameMagic)
-	binary.BigEndian.PutUint32(aad[len(frameMagic):], index)
+func frameAAD(magic string, index uint32, flags byte) []byte {
+	aad := make([]byte, len(magic)+5)
+	copy(aad, magic)
+	binary.BigEndian.PutUint32(aad[len(magic):], index)
 	aad[len(aad)-1] = flags
 	return aad
 }
 
 // relayTransfer decodes one upload streamed from the relay.
 type relayTransfer struct {
-	app  *App
-	aead cipher.AEAD
-	buf  []byte
-	idx  uint32
-	meta fileMeta
-	in   *incoming
-	done bool
-	err  error
+	app   *App
+	aead  cipher.AEAD
+	magic string // frame magic; upMagic when empty
+	buf   []byte
+	idx   uint32
+	meta  fileMeta
+	in    *incoming
+	done  bool
+	err   error
 }
 
 func (t *relayTransfer) feed(p []byte) {
@@ -110,7 +115,11 @@ func (t *relayTransfer) frame(f []byte) error {
 		return errors.New("data after final frame")
 	}
 	flags, iv, ct := f[0], f[1:13], f[13:]
-	plain, err := t.aead.Open(nil, iv, ct, frameAAD(t.idx, flags))
+	magic := t.magic
+	if magic == "" {
+		magic = upMagic
+	}
+	plain, err := t.aead.Open(nil, iv, ct, frameAAD(magic, t.idx, flags))
 	if err != nil {
 		return errDecrypt
 	}
@@ -255,6 +264,33 @@ func (a *App) relayOnce(ctx context.Context, cfg Config) error {
 	a.setRelayStatus(true, "")
 	log.Printf("relay: connected to %s", cfg.RelayURL)
 
+	// Tell the relay the outbox version now and whenever it changes, so phones
+	// see "new files from PC" from the cheap status endpoint.
+	announce := func() {
+		v, n := a.out.state()
+		msg, _ := json.Marshal(map[string]any{"t": "outbox", "v": fmt.Sprintf("%d-%d", v, n)})
+		wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		_ = c.Write(wctx, websocket.MessageText, msg)
+	}
+	announceCtx, stopAnnounce := context.WithCancel(ctx)
+	defer stopAnnounce()
+	go func() {
+		announce()
+		for {
+			select {
+			case <-announceCtx.Done():
+				return
+			case <-a.outboxCh:
+				announce()
+			}
+		}
+	}()
+
+	// Downloads stream in their own goroutine (one at a time, as the relay
+	// expects) so uploads keep flowing meanwhile.
+	var dlMu sync.Mutex
+
 	// The relay answers "ping" with "pong" without waking up, so silence for
 	// longer than a few ping intervals means the connection is dead.
 	var lastRead atomic.Int64
@@ -306,8 +342,9 @@ func (a *App) relayOnce(ctx context.Context, cfg Config) error {
 			continue
 		}
 		var m struct {
-			T  string `json:"t"`
-			ID string `json:"id"`
+			T    string `json:"t"`
+			ID   string `json:"id"`
+			File string `json:"file"`
 		}
 		if json.Unmarshal(data, &m) != nil {
 			continue
@@ -337,6 +374,108 @@ func (a *App) relayOnce(ctx context.Context, cfg Config) error {
 				cur.abort()
 				cur = nil
 			}
+		case "list", "get":
+			go func(t, id, file string) {
+				dlMu.Lock()
+				defer dlMu.Unlock()
+				a.relayRespond(ctx, c, aead, t, id, file)
+			}(m.T, m.ID, m.File)
 		}
+	}
+}
+
+// relayRespond answers a phone's outbox request through the relay:
+// {"t":"rbegin"}, encrypted frames as binary messages, {"t":"rend"}.
+func (a *App) relayRespond(ctx context.Context, c *websocket.Conn, aead cipher.AEAD, kind, id, file string) {
+	send := func(v map[string]any) error {
+		v["id"] = id
+		b, _ := json.Marshal(v)
+		wctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		defer cancel()
+		return c.Write(wctx, websocket.MessageText, b)
+	}
+	var meta any
+	var body io.Reader = strings.NewReader("")
+	if kind == "list" {
+		meta = map[string]any{"items": a.out.list()}
+	} else {
+		f, item, err := a.out.open(file)
+		if err != nil {
+			_ = send(map[string]any{"t": "rbegin", "ok": false, "error": "not_found"})
+			return
+		}
+		defer f.Close()
+		meta, body = item, f
+	}
+	if send(map[string]any{"t": "rbegin", "ok": true}) != nil {
+		return
+	}
+	err := encryptFrames(aead, downMagic, meta, body, func(msg []byte) error {
+		wctx, cancel := context.WithTimeout(ctx, time.Minute)
+		defer cancel()
+		return c.Write(wctx, websocket.MessageBinary, msg)
+	})
+	if err != nil {
+		log.Printf("relay: sending %s failed: %v", kind, err)
+	}
+	_ = send(map[string]any{"t": "rend", "ok": err == nil})
+}
+
+// encryptFrames writes meta and the contents of r in the relay frame format,
+// handing emit messages of at most relayChunk bytes.
+func encryptFrames(aead cipher.AEAD, magic string, meta any, r io.Reader, emit func([]byte) error) error {
+	const chunk = 1 << 20
+	const relayChunk = 256 << 10
+	var idx uint32
+	frame := func(plain []byte, final bool) error {
+		var flags byte
+		if final {
+			flags = flagFinal
+		}
+		iv := make([]byte, 12)
+		if _, err := rand.Read(iv); err != nil {
+			return err
+		}
+		ct := aead.Seal(nil, iv, plain, frameAAD(magic, idx, flags))
+		idx++
+		out := make([]byte, 4+1+12, 4+1+12+len(ct))
+		binary.BigEndian.PutUint32(out, uint32(1+12+len(ct)))
+		out[4] = flags
+		copy(out[5:], iv)
+		out = append(out, ct...)
+		for o := 0; o < len(out); o += relayChunk {
+			if err := emit(out[o:min(o+relayChunk, len(out))]); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	m, err := json.Marshal(meta)
+	if err != nil {
+		return err
+	}
+	if err := frame(m, false); err != nil {
+		return err
+	}
+	// Read one chunk ahead so the last data frame can be flagged final.
+	cur := make([]byte, chunk)
+	n, err := io.ReadFull(r, cur)
+	if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+		return err
+	}
+	cur = cur[:n]
+	for {
+		next := make([]byte, chunk)
+		nn, err := io.ReadFull(r, next)
+		if err != nil && err != io.EOF && err != io.ErrUnexpectedEOF {
+			return err
+		}
+		if nn == 0 {
+			return frame(cur, true)
+		}
+		if err := frame(cur, false); err != nil {
+			return err
+		}
+		cur = next[:nn]
 	}
 }
