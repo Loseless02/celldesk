@@ -1,6 +1,6 @@
 // Keeps the app shell available offline when served over HTTPS by the relay,
 // so queued photos can still be captured without a connection.
-const CACHE = 'celldesk-v2';
+const CACHE = 'celldesk-v3';
 const SHELL = ['./', 'index.html', 'style.css', 'app.js', 'sha256.js', 'scanner.js', 'manifest.webmanifest',
   'icons/icon.svg', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 

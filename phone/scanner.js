@@ -1,5 +1,5 @@
 // Document scanner: photo -> detect the page -> adjust corners -> straighten
-// and clean up -> repeat for more pages -> one PDF handed to the sender.
+// -> pick a style per page -> more pages -> one PDF handed to the sender.
 // Everything runs on the phone; no libraries.
 (function () {
   'use strict';
@@ -7,15 +7,18 @@
   const $ = (id) => document.getElementById(id);
   const MAX_SRC = 3000;  // longest side kept from the camera photo
   const MAX_OUT = 2400;  // longest side of a straightened page
-  const FILTERS = ['clean', 'gray', 'color'];
-  const FILTER_LABEL = { clean: 'Clean', gray: 'Gray', color: 'Color' };
+  const FILTERS = [['color', 'Color'], ['gray', 'Grayscale'], ['bw', 'B&W'], ['photo', 'Original']];
+  const LOUPE = 128;     // magnifier size in CSS pixels
+  const ZOOM = 2.5;      // magnifier zoom relative to the on-screen photo
 
-  let send = null;     // callback(files)
-  let src = null;      // canvas holding the current photo
-  let quad = null;     // page corners in src pixels: TL, TR, BR, BL
-  let pages = [];      // { blob, w, h, url }
-  let filter = 'clean';
-  let view = null;     // { scale, ox, oy } src -> stage pixels
+  let send = null;       // callback(files)
+  let src = null;        // canvas holding the photo being cropped
+  let quad = null;       // page corners in src pixels: TL, TR, BR, BL
+  let pages = [];        // { warped, filter, blob, w, h, url }
+  let current = -1;      // page shown in review
+  let lastFilter = 'color';
+  let view = null;       // { scale, ox, oy } src -> stage pixels
+  let active = null;     // handle being dragged
 
   // ---------- image loading ----------
 
@@ -54,8 +57,11 @@
     return Math.abs(a) / 2;
   }
 
-  // Paper is usually the largest bright region: threshold with Otsu, take the
-  // biggest connected bright blob and use its extreme points as corners.
+  // Two guesses at the page, keeping the bigger valid one:
+  //  A. the largest bright blob (Otsu threshold): paper on a darker desk;
+  //  B. everything not connected to the photo border in the desk's colour:
+  //     also catches dark headers, stamps and photos printed on the page.
+  // Corners are the blob's extreme points along the two diagonals.
   function detectQuad(c) {
     const W = c.width, H = c.height;
     const k = 256 / Math.max(W, H);
@@ -87,9 +93,9 @@
       if (between > best) { best = between; th = v; }
     }
 
-    const seen = new Uint8Array(n);
     const stack = new Int32Array(n);
-    const flood = (start, visit) => {
+    // Flood fill over mask[] from start, marking seen[]; returns pixel count.
+    const flood = (mask, seen, start, visit) => {
       let sp = 0, size = 0;
       stack[sp++] = start;
       seen[start] = 1;
@@ -98,32 +104,66 @@
         size++;
         const x = p % w, y = (p / w) | 0;
         if (visit) visit(x, y);
-        if (x > 0 && !seen[p - 1] && gray[p - 1] > th) { seen[p - 1] = 1; stack[sp++] = p - 1; }
-        if (x < w - 1 && !seen[p + 1] && gray[p + 1] > th) { seen[p + 1] = 1; stack[sp++] = p + 1; }
-        if (y > 0 && !seen[p - w] && gray[p - w] > th) { seen[p - w] = 1; stack[sp++] = p - w; }
-        if (y < h - 1 && !seen[p + w] && gray[p + w] > th) { seen[p + w] = 1; stack[sp++] = p + w; }
+        if (x > 0 && !seen[p - 1] && mask[p - 1]) { seen[p - 1] = 1; stack[sp++] = p - 1; }
+        if (x < w - 1 && !seen[p + 1] && mask[p + 1]) { seen[p + 1] = 1; stack[sp++] = p + 1; }
+        if (y > 0 && !seen[p - w] && mask[p - w]) { seen[p - w] = 1; stack[sp++] = p - w; }
+        if (y < h - 1 && !seen[p + w] && mask[p + w]) { seen[p + w] = 1; stack[sp++] = p + w; }
       }
       return size;
     };
-    let bestStart = -1, bestSize = 0;
-    for (let i = 0; i < n; i++) {
-      if (seen[i] || gray[i] <= th) continue;
-      const size = flood(i, null);
-      if (size > bestSize) { bestSize = size; bestStart = i; }
-    }
-    if (bestStart < 0 || bestSize < n * 0.12 || bestSize > n * 0.97) return insetQuad(W, H);
+    const blobQuad = (mask) => {
+      let seen = new Uint8Array(n);
+      let start = -1, size = 0;
+      for (let i = 0; i < n; i++) {
+        if (seen[i] || !mask[i]) continue;
+        const s = flood(mask, seen, i, null);
+        if (s > size) { size = s; start = i; }
+      }
+      if (start < 0 || size < n * 0.12 || size > n * 0.97) return null;
+      seen = new Uint8Array(n);
+      let tl = [0, 0, Infinity], br = [0, 0, -Infinity], tr = [0, 0, -Infinity], bl = [0, 0, Infinity];
+      flood(mask, seen, start, (x, y) => {
+        const s = x + y, df = x - y;
+        if (s < tl[2]) tl = [x, y, s];
+        if (s > br[2]) br = [x, y, s];
+        if (df > tr[2]) tr = [x, y, df];
+        if (df < bl[2]) bl = [x, y, df];
+      });
+      const q = [tl, tr, br, bl].map(([x, y]) => [(x + 0.5) / k, (y + 0.5) / k]);
+      return quadArea(q) < W * H * 0.1 ? null : q;
+    };
 
-    seen.fill(0);
-    let tl = [0, 0, Infinity], br = [0, 0, -Infinity], tr = [0, 0, -Infinity], bl = [0, 0, Infinity];
-    flood(bestStart, (x, y) => {
-      const s = x + y, df = x - y;
-      if (s < tl[2]) tl = [x, y, s];
-      if (s > br[2]) br = [x, y, s];
-      if (df > tr[2]) tr = [x, y, df];
-      if (df < bl[2]) bl = [x, y, df];
-    });
-    const q = [tl, tr, br, bl].map(([x, y]) => [(x + 0.5) / k, (y + 0.5) / k]);
-    return quadArea(q) < W * H * 0.1 ? insetQuad(W, H) : q;
+    // A: bright blob.
+    const bright = new Uint8Array(n);
+    for (let i = 0; i < n; i++) bright[i] = gray[i] > th ? 1 : 0;
+    const qa = blobQuad(bright);
+
+    // B: the desk is whatever touches the border and looks like the border.
+    const border = [];
+    for (let x = 0; x < w; x++) border.push(x, (h - 1) * w + x);
+    for (let y = 1; y < h - 1; y++) border.push(y * w, y * w + w - 1);
+    const mean = [0, 0, 0];
+    border.forEach((p) => { for (let ch = 0; ch < 3; ch++) mean[ch] += d[p * 4 + ch]; });
+    for (let ch = 0; ch < 3; ch++) mean[ch] /= border.length;
+    let spread = 0;
+    const dist = (p) => Math.hypot(d[p * 4] - mean[0], d[p * 4 + 1] - mean[1], d[p * 4 + 2] - mean[2]);
+    border.forEach((p) => { spread += dist(p) * dist(p); });
+    const tol = Math.min(90, Math.max(28, 2.2 * Math.sqrt(spread / border.length)));
+    const deskLike = new Uint8Array(n);
+    for (let i = 0; i < n; i++) deskLike[i] = dist(i) < tol ? 1 : 0;
+    const desk = new Uint8Array(n);
+    border.forEach((p) => { if (deskLike[p] && !desk[p]) flood(deskLike, desk, p, null); });
+    const notDesk = new Uint8Array(n);
+    for (let i = 0; i < n; i++) notDesk[i] = desk[i] ? 0 : 1;
+    const qb = blobQuad(notDesk);
+
+    // B wins when it adds a dark band to A; much bigger usually means it
+    // swallowed a shadow or clutter on the desk.
+    if (qa && qb) {
+      const a = quadArea(qa), b = quadArea(qb);
+      return b >= a && b <= a * 1.6 ? qb : qa;
+    }
+    return qb || qa || insetQuad(W, H);
   }
 
   // ---------- straightening ----------
@@ -190,7 +230,8 @@
     return out;
   }
 
-  // ---------- clean-up filters ----------
+
+  // ---------- styles ----------
 
   function boxBlur(a, w, h, r) {
     const tmp = new Float32Array(a.length);
@@ -210,45 +251,80 @@
     }
   }
 
+  // Paper brightness at every pixel: the brightest value per 8x8 block,
+  // smoothed and interpolated back up. Dividing by it removes shadows and
+  // uneven light while leaving the ink alone.
+  function paperLevels(gray, W, H) {
+    const s = 8, bw = Math.ceil(W / s), bh = Math.ceil(H / s);
+    const bg = new Float32Array(bw * bh);
+    for (let y = 0; y < H; y++) {
+      const row = ((y / s) | 0) * bw;
+      for (let x = 0; x < W; x++) {
+        const bi = row + ((x / s) | 0), v = gray[y * W + x];
+        if (v > bg[bi]) bg[bi] = v;
+      }
+    }
+    boxBlur(bg, bw, bh, 3);
+    // Shadows rarely darken paper below ~60% of its usual brightness; anything
+    // darker is a coloured area (header, photo) that must not be "lightened".
+    const sorted = Float32Array.from(bg).sort();
+    const floor = 0.6 * sorted[Math.floor(sorted.length * 0.9)];
+    for (let i = 0; i < bg.length; i++) if (bg[i] < floor) bg[i] = floor;
+    const out = new Float32Array(W * H);
+    for (let y = 0; y < H; y++) {
+      const by = Math.min(bh - 1, Math.max(0, (y + 0.5) / s - 0.5));
+      const y0 = by | 0, y1 = Math.min(bh - 1, y0 + 1), fy = by - y0;
+      for (let x = 0; x < W; x++) {
+        const bx = Math.min(bw - 1, Math.max(0, (x + 0.5) / s - 0.5));
+        const x0 = bx | 0, x1 = Math.min(bw - 1, x0 + 1), fx = bx - x0;
+        const top = bg[y0 * bw + x0] + (bg[y0 * bw + x1] - bg[y0 * bw + x0]) * fx;
+        const bot = bg[y1 * bw + x0] + (bg[y1 * bw + x1] - bg[y1 * bw + x0]) * fx;
+        out[y * W + x] = Math.max(24, top + (bot - top) * fy);
+      }
+    }
+    return out;
+  }
+
+  // Gamma curve as a lookup table: deepens ink after the paper went white.
+  function gammaLUT(g) {
+    const lut = new Uint8ClampedArray(256);
+    for (let v = 0; v < 256; v++) lut[v] = 255 * Math.pow(v / 255, g);
+    return lut;
+  }
+
   function applyFilter(c, f) {
-    if (f === 'color') return c;
-    const W = c.width, H = c.height;
+    if (f === 'photo') return c;
+    const W = c.width, H = c.height, n = W * H;
     const ctx = c.getContext('2d');
     const id = ctx.getImageData(0, 0, W, H);
     const D = id.data;
-    const n = W * H;
     const gray = new Uint8ClampedArray(n);
     for (let i = 0; i < n; i++) gray[i] = (D[i * 4] * 77 + D[i * 4 + 1] * 150 + D[i * 4 + 2] * 29) >> 8;
+    const paper = paperLevels(gray, W, H);
 
-    if (f === 'clean') {
-      // Estimate the paper brightness everywhere (brightest pixel per 8x8 block,
-      // smoothed), divide it out to remove shadows, then push paper to white.
-      const s = 8, bw = Math.ceil(W / s), bh = Math.ceil(H / s);
-      const bg = new Float32Array(bw * bh);
-      for (let y = 0; y < H; y++) {
-        const row = ((y / s) | 0) * bw;
-        for (let x = 0; x < W; x++) {
-          const bi = row + ((x / s) | 0), v = gray[y * W + x];
-          if (v > bg[bi]) bg[bi] = v;
+    if (f === 'color') {
+      // White paper, true colours: scale each channel by the local paper level.
+      const lut = gammaLUT(1.25);
+      for (let i = 0; i < n; i++) {
+        const k = 255 / (paper[i] * 0.95);
+        for (let ch = 0; ch < 3; ch++) {
+          const v = D[i * 4 + ch] * k;
+          D[i * 4 + ch] = lut[v > 255 ? 255 : v | 0];
         }
       }
-      boxBlur(bg, bw, bh, 3);
-      for (let y = 0; y < H; y++) {
-        const by = Math.min(bh - 1, Math.max(0, (y + 0.5) / s - 0.5));
-        const y0 = by | 0, y1 = Math.min(bh - 1, y0 + 1), fy = by - y0;
-        for (let x = 0; x < W; x++) {
-          const bx = Math.min(bw - 1, Math.max(0, (x + 0.5) / s - 0.5));
-          const x0 = bx | 0, x1 = Math.min(bw - 1, x0 + 1), fx = bx - x0;
-          const top = bg[y0 * bw + x0] + (bg[y0 * bw + x1] - bg[y0 * bw + x0]) * fx;
-          const bot = bg[y1 * bw + x0] + (bg[y1 * bw + x1] - bg[y1 * bw + x0]) * fx;
-          const paper = Math.max(24, top + (bot - top) * fy);
-          const ratio = gray[y * W + x] / paper;
-          const t = (ratio - 0.45) / (0.88 - 0.45);
-          gray[y * W + x] = t >= 1 ? 255 : t <= 0 ? 0 : 255 * t * t * (3 - 2 * t);
-        }
+    } else if (f === 'gray') {
+      const lut = gammaLUT(1.35);
+      for (let i = 0; i < n; i++) {
+        const v = gray[i] * 255 / (paper[i] * 0.95);
+        D[i * 4] = D[i * 4 + 1] = D[i * 4 + 2] = lut[v > 255 ? 255 : v | 0];
+      }
+    } else {
+      // Black & white: paper to pure white, ink to black, soft edges kept.
+      for (let i = 0; i < n; i++) {
+        const t = (gray[i] / paper[i] - 0.45) / (0.88 - 0.45);
+        D[i * 4] = D[i * 4 + 1] = D[i * 4 + 2] = t >= 1 ? 255 : t <= 0 ? 0 : 255 * t * t * (3 - 2 * t);
       }
     }
-    for (let i = 0; i < n; i++) { D[i * 4] = D[i * 4 + 1] = D[i * 4 + 2] = gray[i]; }
     ctx.putImageData(id, 0, 0);
     return c;
   }
@@ -291,11 +367,14 @@
     return new Blob(parts, { type: 'application/pdf' });
   }
 
+
   // ---------- UI ----------
 
   // Lets the "busy" overlay paint before heavy work. A timer, not
   // requestAnimationFrame, which never fires while the page is hidden.
   const nextFrame = () => new Promise((r) => setTimeout(r, 40));
+  const toJpeg = (c, q) => new Promise((r) => c.toBlob(r, 'image/jpeg', q));
+  const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
   function busy(text) {
     $('scan-busy').hidden = !text;
@@ -304,25 +383,32 @@
 
   function setMode(mode) {
     const crop = mode === 'crop';
+    const page = pages[current];
     $('scanner').hidden = false;
     $('scan-canvas').hidden = !crop;
     $('scan-svg').style.display = crop ? '' : 'none';
-    $('scan-filter').hidden = !crop;
+    $('scan-loupe').hidden = true;
     $('scan-retake').hidden = !crop;
     $('scan-keep').hidden = !crop;
-    $('scan-preview').hidden = crop || pages.length === 0;
+    $('scan-preview').hidden = crop || !page;
+    $('scan-filters').hidden = crop || !page;
     $('scan-add').hidden = crop;
     $('scan-send').hidden = crop;
-    $('scan-title').textContent = crop ? 'Page ' + (pages.length + 1) + ' · drag the corners' : pages.length + (pages.length === 1 ? ' page' : ' pages');
+    $('scan-title').textContent = crop ? 'Drag near a corner or edge'
+      : page ? 'Page ' + (current + 1) + ' of ' + pages.length : 'No pages';
     $('scan-send').textContent = 'Send PDF (' + pages.length + ')';
     $('scan-send').disabled = pages.length === 0;
+    if (!crop && page) $('scan-preview').src = page.url;
+    renderFilters();
     renderPages();
   }
+
+  // ----- corner adjusting -----
 
   function layout() {
     if (!src) return;
     const stage = $('scan-stage');
-    const sw = stage.clientWidth, sh = stage.clientHeight, pad = 18;
+    const sw = stage.clientWidth, sh = stage.clientHeight, pad = 22;
     const scale = Math.min((sw - pad * 2) / src.width, (sh - pad * 2) / src.height);
     const dw = src.width * scale, dh = src.height * scale;
     view = { scale, ox: (sw - dw) / 2, oy: (sh - dh) / 2 };
@@ -338,38 +424,167 @@
 
   const toStage = ([x, y]) => [view.ox + x * view.scale, view.oy + y * view.scale];
 
-  function drawQuad() {
-    const svg = $('scan-svg');
-    const pts = quad.map(toStage);
-    let html = '<polygon class="scan-quad" points="' + pts.map((p) => p.join(',')).join(' ') + '"/>';
-    pts.forEach((p, i) => {
-      html += '<circle class="scan-handle" cx="' + p[0] + '" cy="' + p[1] + '" r="11"/>' +
-        '<circle class="scan-hit" data-i="' + i + '" cx="' + p[0] + '" cy="' + p[1] + '" r="28"/>';
-    });
-    svg.innerHTML = html;
+  // Corners 0-3, then the midpoints of the edges (edge i joins corners i and i+1).
+  function handles() {
+    const list = quad.map((p, i) => ({ kind: 'corner', i, p }));
+    for (let i = 0; i < 4; i++) {
+      const a = quad[i], b = quad[(i + 1) % 4];
+      list.push({ kind: 'edge', i, p: [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2] });
+    }
+    return list;
   }
 
-  function bindHandles() {
-    const svg = $('scan-svg');
-    let drag = -1;
-    svg.addEventListener('pointerdown', (e) => {
-      const i = e.target.getAttribute && e.target.getAttribute('data-i');
-      if (i === null || i === undefined) return;
-      drag = +i;
-      svg.setPointerCapture(e.pointerId);
+  function drawQuad() {
+    const pts = quad.map(toStage);
+    let html = '<polygon class="scan-quad" points="' + pts.map((p) => p.join(',')).join(' ') + '"/>';
+    handles().forEach((h) => {
+      const [x, y] = toStage(h.p);
+      const on = active && active.kind === h.kind && active.i === h.i;
+      html += h.kind === 'corner'
+        ? '<circle class="scan-handle' + (on ? ' on' : '') + '" cx="' + x + '" cy="' + y + '" r="' + (on ? 13 : 10) + '"/>'
+        : '<circle class="scan-mid' + (on ? ' on' : '') + '" cx="' + x + '" cy="' + y + '" r="' + (on ? 8 : 6) + '"/>';
+    });
+    $('scan-svg').innerHTML = html;
+  }
+
+  // Magnifier in the top corner away from the finger, so the exact corner
+  // stays visible while the finger covers it.
+  function showLoupe() {
+    if (!active || !src) return;
+    const lp = $('scan-loupe');
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const size = Math.round(LOUPE * dpr);
+    if (lp.width !== size) {
+      lp.width = lp.height = size;
+      lp.style.width = lp.style.height = LOUPE + 'px';
+    }
+    const focus = active.kind === 'corner' ? quad[active.i]
+      : [(quad[active.i][0] + quad[(active.i + 1) % 4][0]) / 2, (quad[active.i][1] + quad[(active.i + 1) % 4][1]) / 2];
+    const stageW = $('scan-stage').clientWidth;
+    lp.style.left = (toStage(focus)[0] < stageW / 2 ? stageW - LOUPE - 14 : 14) + 'px';
+    lp.style.top = '14px';
+    lp.hidden = false;
+
+    const g = lp.getContext('2d');
+    const k = view.scale * ZOOM * dpr;  // loupe pixels per photo pixel
+    const half = size / 2 / k;
+    const sx0 = focus[0] - half, sy0 = focus[1] - half;
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, size, size);
+    // Clip the source rectangle to the photo: Safari draws nothing otherwise.
+    const cx0 = Math.max(0, sx0), cy0 = Math.max(0, sy0);
+    const cx1 = Math.min(src.width, sx0 + 2 * half), cy1 = Math.min(src.height, sy0 + 2 * half);
+    if (cx1 > cx0 && cy1 > cy0) {
+      g.drawImage(src, cx0, cy0, cx1 - cx0, cy1 - cy0, (cx0 - sx0) * k, (cy0 - sy0) * k, (cx1 - cx0) * k, (cy1 - cy0) * k);
+    }
+    g.strokeStyle = '#22d3ee';
+    g.lineWidth = 2 * dpr;
+    g.beginPath();
+    quad.forEach((p, i) => {
+      const x = (p[0] - sx0) * k, y = (p[1] - sy0) * k;
+      if (i) g.lineTo(x, y); else g.moveTo(x, y);
+    });
+    g.closePath();
+    g.stroke();
+    const c = size / 2, arm = 9 * dpr;
+    g.strokeStyle = '#fff';
+    g.lineWidth = 1.5 * dpr;
+    g.beginPath();
+    g.moveTo(c - arm, c); g.lineTo(c + arm, c);
+    g.moveTo(c, c - arm); g.lineTo(c, c + arm);
+    g.stroke();
+  }
+
+  // Touch anywhere: the nearest corner (or edge) is grabbed and follows the
+  // finger's movement, not its position, so it never jumps under the finger.
+  function bindDrag() {
+    const stage = $('scan-stage');
+    let drag = null;
+    const pos = (e) => {
+      const r = stage.getBoundingClientRect();
+      return [e.clientX - r.left, e.clientY - r.top];
+    };
+    stage.addEventListener('pointerdown', (e) => {
+      if (!src || !view || $('scan-canvas').hidden) return;
+      const f = pos(e);
+      let best = null, bestD = Infinity;
+      handles().forEach((h) => {
+        const [x, y] = toStage(h.p);
+        // Corners win when a corner and an edge midpoint are about as close.
+        const d = Math.hypot(x - f[0], y - f[1]) * (h.kind === 'edge' ? 1.25 : 1);
+        if (d < bestD) { bestD = d; best = h; }
+      });
+      drag = { h: best, start: f, orig: quad.map((p) => p.slice()) };
+      active = best;
+      try { stage.setPointerCapture(e.pointerId); } catch (err) { /* pointer already gone */ }
       e.preventDefault();
-    });
-    svg.addEventListener('pointermove', (e) => {
-      if (drag < 0 || !view) return;
-      const r = $('scan-stage').getBoundingClientRect();
-      const x = (e.clientX - r.left - view.ox) / view.scale;
-      const y = (e.clientY - r.top - view.oy) / view.scale;
-      quad[drag] = [Math.max(0, Math.min(src.width, x)), Math.max(0, Math.min(src.height, y))];
       drawQuad();
+      showLoupe();
     });
-    const end = () => { drag = -1; };
-    svg.addEventListener('pointerup', end);
-    svg.addEventListener('pointercancel', end);
+    stage.addEventListener('pointermove', (e) => {
+      if (!drag) return;
+      const f = pos(e);
+      const dx = (f[0] - drag.start[0]) / view.scale, dy = (f[1] - drag.start[1]) / view.scale;
+      const move = (i) => {
+        quad[i] = [clamp(drag.orig[i][0] + dx, 0, src.width), clamp(drag.orig[i][1] + dy, 0, src.height)];
+      };
+      move(drag.h.i);
+      if (drag.h.kind === 'edge') move((drag.h.i + 1) % 4);
+      drawQuad();
+      showLoupe();
+    });
+    const end = () => {
+      if (!drag) return;
+      drag = null;
+      active = null;
+      $('scan-loupe').hidden = true;
+      if (src) drawQuad();
+    };
+    stage.addEventListener('pointerup', end);
+    stage.addEventListener('pointercancel', end);
+  }
+
+  // ----- pages and styles -----
+
+  function renderFilters() {
+    const box = $('scan-filters');
+    box.textContent = '';
+    const page = pages[current];
+    FILTERS.forEach(([key, label]) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.textContent = label;
+      b.setAttribute('aria-pressed', String(!!page && page.filter === key));
+      b.onclick = () => setFilter(key);
+      box.appendChild(b);
+    });
+  }
+
+  // Re-renders a page in its style from the straightened colour original.
+  async function renderPage(p) {
+    const c = await loadImage(p.warped);
+    const out = applyFilter(c, p.filter);
+    const blob = await toJpeg(out, 0.9);
+    if (p.url) URL.revokeObjectURL(p.url);
+    Object.assign(p, { blob, w: out.width, h: out.height, url: URL.createObjectURL(blob) });
+  }
+
+  async function setFilter(key) {
+    const p = pages[current];
+    if (!p || p.filter === key) return;
+    p.filter = key;
+    lastFilter = key;
+    renderFilters();
+    busy('Applying…');
+    await nextFrame();
+    try {
+      await renderPage(p);
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      busy('');
+    }
+    setMode('review');
   }
 
   function renderPages() {
@@ -377,10 +592,15 @@
     strip.textContent = '';
     pages.forEach((p, i) => {
       const el = document.createElement('div');
-      el.className = 'pg';
+      el.className = 'pg' + (!src && i === current ? ' sel' : '');
       const img = document.createElement('img');
       img.src = p.url;
       img.alt = 'Page ' + (i + 1);
+      img.onclick = () => {
+        if (src) return;
+        current = i;
+        setMode('review');
+      };
       const rm = document.createElement('button');
       rm.type = 'button';
       rm.className = 'rm';
@@ -389,16 +609,16 @@
       rm.onclick = () => {
         URL.revokeObjectURL(p.url);
         pages.splice(i, 1);
-        if (!src) {
-          $('scan-preview').src = pages.length ? pages[pages.length - 1].url : '';
-          setMode('review');
-        } else renderPages();
+        if (i < current || current >= pages.length) current--;
+        if (src) renderPages(); else setMode('review');
       };
       el.append(img, rm);
       strip.appendChild(el);
     });
     strip.hidden = pages.length === 0;
   }
+
+  // ----- flow -----
 
   async function onPhoto(file) {
     $('scanner').hidden = false;
@@ -422,11 +642,16 @@
     busy('Straightening…');
     await nextFrame();
     try {
-      const out = applyFilter(warp(src, quad), filter);
-      const blob = await new Promise((r) => out.toBlob(r, 'image/jpeg', 0.9));
-      pages.push({ blob, w: out.width, h: out.height, url: URL.createObjectURL(blob) });
+      const flat = warp(src, quad);
+      const p = { warped: await toJpeg(flat, 0.95), filter: lastFilter };
+      const out = applyFilter(flat, p.filter);
+      p.blob = await toJpeg(out, 0.9);
+      p.w = out.width;
+      p.h = out.height;
+      p.url = URL.createObjectURL(p.blob);
+      pages.push(p);
+      current = pages.length - 1;
       src = null;
-      $('scan-preview').src = pages[pages.length - 1].url;
       setMode('review');
     } finally {
       busy('');
@@ -453,8 +678,10 @@
   function close() {
     pages.forEach((p) => URL.revokeObjectURL(p.url));
     pages = [];
+    current = -1;
     src = null;
     quad = null;
+    active = null;
     $('scanner').hidden = true;
   }
 
@@ -467,20 +694,15 @@
         if (f) onPhoto(f);
       });
     });
-    $('scan-filter').textContent = FILTER_LABEL[filter];
-    $('scan-filter').onclick = () => {
-      filter = FILTERS[(FILTERS.indexOf(filter) + 1) % FILTERS.length];
-      $('scan-filter').textContent = FILTER_LABEL[filter];
-    };
     $('scan-keep').onclick = keep;
     $('scan-send').onclick = finish;
     $('scan-cancel').onclick = () => {
       if (pages.length && !confirm('Discard ' + pages.length + ' scanned page(s)?')) return;
       close();
     };
-    bindHandles();
+    bindDrag();
     window.addEventListener('resize', () => { if (src) layout(); });
   }
 
-  window.CellDeskScanner = { init, onPhoto, detectQuad, warp, applyFilter, buildPDF };
+  window.CellDeskScanner = { init, onPhoto, detectQuad, warp, applyFilter, buildPDF, setFilter };
 })();

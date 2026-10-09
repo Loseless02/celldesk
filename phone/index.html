@@ -83,14 +83,16 @@
     <div class="scan-bar">
       <button class="link" id="scan-cancel" type="button">Cancel</button>
       <span id="scan-title"></span>
-      <button class="link" id="scan-filter" type="button" aria-label="Change scan style"></button>
+      <span class="link" aria-hidden="true"></span>
     </div>
     <div class="scan-stage" id="scan-stage">
       <canvas id="scan-canvas"></canvas>
       <svg id="scan-svg" aria-hidden="true"></svg>
-      <img class="scan-preview" id="scan-preview" alt="Last scanned page" hidden>
+      <canvas class="scan-loupe" id="scan-loupe" hidden></canvas>
+      <img class="scan-preview" id="scan-preview" alt="Scanned page" hidden>
       <div class="scan-busy" id="scan-busy" hidden></div>
     </div>
+    <div class="scan-filters" id="scan-filters" role="group" aria-label="Scan style" hidden></div>
     <div class="scan-pages" id="scan-pages" hidden></div>
     <div class="scan-actions">
       <label class="btn" id="scan-retake"><input class="file" type="file" accept="image/*" capture="environment" data-scan>Retake</label>

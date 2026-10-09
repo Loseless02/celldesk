@@ -65,7 +65,7 @@ The bottom bar on the phone:
 | **Gallery** | Send photos and videos from the photo library |
 | **Files** | Send any file (PDFs, documents, zips…) from the phone's files |
 | **Shutter** | Take a photo with the phone camera and send it at full quality |
-| **Scan** | Scan documents: finds the page, lets you fix the corners, straightens it, removes shadows, and sends all pages as one PDF |
+| **Scan** | Scan documents: finds the page, straightens it, removes shadows, and sends all pages as one PDF. Touch anywhere near a corner or edge to drag it (a magnifier shows the exact spot). Per page style: **Color**, **Grayscale**, **B&W** or **Original**; tap a page thumbnail to change it later |
 | **Queued** | Files waiting for the PC; tap to retry now |
 
 **PC → phone:** drop files on **Send to phone** in the dashboard. An inbox
