@@ -81,9 +81,17 @@
 
   // ---------- transports ----------
 
+  // Tailscale gives devices 100.64.0.0/10 addresses.
+  function isTailnetHost(host) {
+    const m = /^100\.(\d+)\.\d+\.\d+$/.exec(host);
+    return !!m && +m[1] >= 64 && +m[1] <= 127;
+  }
+
   function lanTransport(p) {
+    const tailnet = isTailnetHost(location.hostname);
     return {
-      label: 'Wi-Fi',
+      label: tailnet ? 'Private' : 'Wi-Fi',
+      offlineText: tailnet ? 'PC not reachable — is Tailscale on?' : 'PC not reachable',
       maxSize: Infinity,
       async hello() {
         const r = await fetch('/api/hello?t=' + encodeURIComponent(p.token), { cache: 'no-store' });
@@ -139,6 +147,7 @@
 
     return {
       label: 'Anywhere',
+      offlineText: 'PC offline — photos will queue',
       maxSize: RELAY_MAX,
       async hello() {
         const r = await fetch('/s/' + p.room, { cache: 'no-store' });
@@ -220,7 +229,7 @@
     const size = formatSize(job.size);
     let sub = size;
     switch (job.state) {
-      case 'waiting': sub += online ? ' · Waiting…' : ' · Queued — sends when the PC is reachable'; break;
+      case 'waiting': sub += online ? ' · Waiting…' : ' · Queued, sends when the PC is reachable'; break;
       case 'preparing': sub += ' · Preparing…'; break;
       case 'sending': sub += ' · Sending ' + Math.round(job.progress * 100) + '%'; break;
       case 'done': sub += ' · Saved' + (job.result && job.result.verified ? ' ✓ verified' : ''); break;
@@ -323,7 +332,7 @@
     if (h.unpaired) { showUnpaired(); return; }
     online = h.online;
     if (online) setStatus('online', h.name || 'Connected');
-    else setStatus('offline', transport.label === 'Wi-Fi' ? 'PC not reachable' : 'PC offline — photos will queue');
+    else setStatus('offline', transport.offlineText);
     jobs.forEach((j) => { if (j.state === 'waiting') render(j); });
     if (online) pump();
   }

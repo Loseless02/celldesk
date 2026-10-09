@@ -66,10 +66,27 @@ To open the dashboard again, run CellDesk again (it won't start twice) or go to
 dashboard. On Windows the app has no console window. Use *Quit* in the
 dashboard to stop it.
 
-## Send from anywhere (optional, free)
+## Send from anywhere, privately (Tailscale)
 
-To send when your phone isn't on the same network as your PC, deploy your own
-relay to Cloudflare once. The free plan covers it: no card, no server to run.
+No website, nothing public: [Tailscale](https://tailscale.com/download) puts
+your phone and PC on a private encrypted network that only devices you approve
+can join. Both sides only make outbound connections, so there's nothing to
+forward on your router.
+
+1. Install Tailscale on the PC and on the phone and sign in with the same account.
+2. In the dashboard, open **Pair a phone → Private** and scan the QR code.
+3. Keep Tailscale switched on on the phone. That pairing works at home and away.
+
+To let a friend send you photos, invite them to your tailnet
+(Tailscale admin console → Users → Invite) and show them the QR code. They
+still need the code: being on the tailnet alone isn't enough.
+
+## Send from anywhere without an extra app (relay)
+
+If you'd rather not run a VPN app on the phone, deploy your own relay to
+Cloudflare once. The free plan covers it: no card, no server to run. The relay
+URL is public, but it only serves the empty app shell; without a QR code nobody
+can send anything, and files are end-to-end encrypted.
 
 ```bash
 cd relay
@@ -89,13 +106,13 @@ Add the `CLOUDFLARE_API_TOKEN` (template *Edit Cloudflare Workers*) and
 `CLOUDFLARE_ACCOUNT_ID` repository secrets, then run **Actions → Deploy relay**.
 </details>
 
-| | Same Wi-Fi | Anywhere |
-| --- | --- | --- |
-| Setup | none | deploy relay once |
-| Speed | LAN speed | your phone's upload speed |
-| Encryption | none (your own network) | end-to-end AES-256-GCM |
-| Max file size | unlimited | 95 MB per file |
-| Works offline / app install | home-screen shortcut | installable app (PWA, offline queue) |
+| | Same Wi-Fi | Private (Tailscale) | Anywhere (relay) |
+| --- | --- | --- | --- |
+| Setup | none | Tailscale app on PC + phone | deploy relay once |
+| Public URL | no | no | yes (useless without QR code) |
+| Speed | LAN speed | near LAN at home, upload speed away | your phone's upload speed |
+| Encryption | none (your own network) | WireGuard | end-to-end AES-256-GCM |
+| Max file size | unlimited | unlimited | 95 MB per file |
 
 ## Quality notes
 

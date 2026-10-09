@@ -161,6 +161,17 @@ func (a *App) lanPhoneURL() string {
 	return fmt.Sprintf("http://%s/?t=%s", net.JoinHostPort(lanIP(), strconv.Itoa(cfg.Port)), cfg.LANToken)
 }
 
+// tailnetPhoneURL is the pairing link over Tailscale, "" when it is not running.
+// It uses the same token as the Wi-Fi link: only the address differs.
+func (a *App) tailnetPhoneURL() string {
+	ip := tailscaleIP()
+	if ip == "" {
+		return ""
+	}
+	cfg := a.config()
+	return fmt.Sprintf("http://%s/?t=%s", net.JoinHostPort(ip, strconv.Itoa(cfg.Port)), cfg.LANToken)
+}
+
 func (a *App) relayPhoneURL() string {
 	cfg := a.config()
 	if cfg.RelayURL == "" {
@@ -181,6 +192,7 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 		"openOnReceive": cfg.OpenOnReceive,
 		"autostart":     autostartEnabled(),
 		"lan":           map[string]any{"url": a.lanPhoneURL(), "ip": lanIP(), "port": cfg.Port},
+		"tailnet":       map[string]any{"url": a.tailnetPhoneURL(), "ip": tailscaleIP()},
 		"relay": map[string]any{
 			"url":      cfg.RelayURL,
 			"online":   online,
@@ -192,9 +204,14 @@ func (a *App) handleState(w http.ResponseWriter, r *http.Request) {
 }
 
 func (a *App) handleQR(w http.ResponseWriter, r *http.Request) {
-	content := a.lanPhoneURL()
-	if r.URL.Query().Get("mode") == "relay" {
+	var content string
+	switch r.URL.Query().Get("mode") {
+	case "relay":
 		content = a.relayPhoneURL()
+	case "tailnet":
+		content = a.tailnetPhoneURL()
+	default:
+		content = a.lanPhoneURL()
 	}
 	if content == "" {
 		http.NotFound(w, r)

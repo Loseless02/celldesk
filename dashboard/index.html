@@ -32,7 +32,7 @@
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 20px; }
   .card + .card { margin-top: 16px; }
   h2 { font-size: 15px; margin: 0 0 12px; }
-  .tabs { display: grid; grid-template-columns: 1fr 1fr; background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; margin-bottom: 16px; }
+  .tabs { display: grid; grid-template-columns: 1fr 1fr 1fr;background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 3px; margin-bottom: 16px; }
   .tabs button { border: 0; background: none; color: var(--muted); font: inherit; font-weight: 600; padding: 7px; border-radius: 8px; cursor: pointer; }
   .tabs button[aria-selected="true"] { background: var(--panel); color: var(--text); box-shadow: 0 1px 2px rgba(0,0,0,.12); }
   .qr { display: block; width: 100%; max-width: 280px; aspect-ratio: 1; margin: 0 auto 12px; border-radius: 12px; background: #fff; padding: 8px; image-rendering: pixelated; }
@@ -77,6 +77,7 @@
       <h2>Pair a phone</h2>
       <div class="tabs" role="tablist">
         <button role="tab" id="tab-lan" aria-selected="true">Same Wi-Fi</button>
+        <button role="tab" id="tab-tailnet" aria-selected="false">Private</button>
         <button role="tab" id="tab-relay" aria-selected="false">Anywhere</button>
       </div>
 
@@ -84,6 +85,23 @@
         <p class="hint">Scan with the phone camera (iPhone or Android), then use <b>Add to Home Screen</b> for a one-tap app.</p>
         <img class="qr" id="qr-lan" alt="Pairing QR code for the local network">
         <div class="url" id="url-lan"></div>
+      </div>
+
+      <div id="pane-tailnet" hidden>
+        <div id="tailnet-ready" hidden>
+          <p class="status-line"><span class="dot ok"></span><span id="tailnet-ip"></span></p>
+          <p class="hint">Works from anywhere over your private Tailscale network. No public site: only devices you add to your tailnet can reach this PC. Keep Tailscale switched on on the phone.</p>
+          <img class="qr" id="qr-tailnet" alt="Pairing QR code for Tailscale">
+        </div>
+        <div id="tailnet-setup">
+          <p class="status-line"><span class="dot"></span><span>Tailscale not detected</span></p>
+          <ol>
+            <li>Install <b>Tailscale</b> on this PC and on your phone (free, tailscale.com/download, App Store / Play Store).</li>
+            <li>Sign in with the same account on both.</li>
+            <li>This tab updates by itself and shows the QR code.</li>
+          </ol>
+          <p class="hint" style="margin-top:10px">To let a friend send you photos, invite them to your tailnet (Tailscale admin → Users → Invite), then show them this QR code.</p>
+        </div>
       </div>
 
       <div id="pane-relay" hidden>
@@ -198,10 +216,20 @@
   function setTab(t) {
     tab = t;
     try { localStorage.setItem('celldesk.tab', t); } catch (e) {}
-    $('tab-lan').setAttribute('aria-selected', String(t === 'lan'));
-    $('tab-relay').setAttribute('aria-selected', String(t === 'relay'));
-    $('pane-lan').hidden = t !== 'lan';
-    $('pane-relay').hidden = t !== 'relay';
+    ['lan', 'tailnet', 'relay'].forEach((name) => {
+      $('tab-' + name).setAttribute('aria-selected', String(t === name));
+      $('pane-' + name).hidden = t !== name;
+    });
+  }
+
+  function renderTailnet() {
+    const tn = state.tailnet;
+    $('tailnet-ready').hidden = !tn.url;
+    $('tailnet-setup').hidden = !!tn.url;
+    if (tn.url) {
+      $('tailnet-ip').textContent = 'Tailscale connected · ' + tn.ip;
+      $('qr-tailnet').src = '/api/admin/qr.png?mode=tailnet&_=' + encodeURIComponent(tn.url);
+    }
   }
 
   function renderRelay() {
@@ -229,6 +257,7 @@
     $('open-on-receive').checked = state.openOnReceive;
     $('autostart').checked = state.autostart;
     if (document.activeElement !== $('save-dir')) $('save-dir').value = state.saveDir;
+    renderTailnet();
     renderRelay();
     renderGallery();
   }
@@ -260,7 +289,16 @@
   }
 
   $('tab-lan').onclick = () => setTab('lan');
+  $('tab-tailnet').onclick = () => setTab('tailnet');
   $('tab-relay').onclick = () => setTab('relay');
+  // Notice Tailscale coming up (or its address changing) without a reload.
+  setInterval(() => {
+    if (tab === 'tailnet' && state && !document.hidden) {
+      api('/api/admin/state').then((s) => {
+        if (s.tailnet.url !== state.tailnet.url) { state.tailnet = s.tailnet; renderTailnet(); }
+      }).catch(() => {});
+    }
+  }, 4000);
   $('relay-save').onclick = () => saveSetting({ relayUrl: $('relay-url').value }, $('relay-err'));
   $('open-on-receive').onchange = (e) => saveSetting({ openOnReceive: e.target.checked }, $('settings-err'));
   $('autostart').onchange = (e) => saveSetting({ autostart: e.target.checked }, $('settings-err'));
